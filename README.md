@@ -29,4 +29,4 @@ Slack action/reply → Bridge API (Hono) → PostgreSQL → Chatwork API
 
 ## ライセンス
 
-未定（OSS として配布予定）。
+[MIT License](LICENSE)
