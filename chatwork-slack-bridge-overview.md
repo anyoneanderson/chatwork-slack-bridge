@@ -148,7 +148,7 @@ Actions: [送信する] [キャンセル]
 
 ```sql
 create table chatwork_rooms (
-  id bigserial primary key,
+  id bigint generated always as identity primary key,
   chatwork_room_id text not null unique,
   room_name text not null,
   slack_channel_id text not null,
@@ -163,7 +163,7 @@ create table chatwork_rooms (
 
 ```sql
 create table chatwork_messages (
-  id bigserial primary key,
+  id bigint generated always as identity primary key,
   chatwork_room_id text not null references chatwork_rooms(chatwork_room_id),
   chatwork_message_id text not null,
   chatwork_account_id text,
@@ -191,7 +191,7 @@ create index chatwork_messages_status_idx
 
 ```sql
 create table outbound_messages (
-  id bigserial primary key,
+  id bigint generated always as identity primary key,
   chatwork_room_id text not null references chatwork_rooms(chatwork_room_id),
   source text not null default 'slack',
   slack_channel_id text not null,
@@ -216,7 +216,7 @@ create index outbound_messages_status_idx
 
 ```sql
 create table delivery_attempts (
-  id bigserial primary key,
+  id bigint generated always as identity primary key,
   outbound_message_id bigint references outbound_messages(id),
   target text not null,
   status text not null,
@@ -224,13 +224,21 @@ create table delivery_attempts (
   error_message text,
   created_at timestamptz not null default now()
 );
+
+create index delivery_attempts_outbound_message_id_idx
+  on delivery_attempts (outbound_message_id);
 ```
+
+> スキーマ方針（`docs/coding-rules.md` の「データベース（PostgreSQL / Drizzle）」参照）:
+> - 主キーは `bigint generated always as identity`（`serial`/`bigserial` は使わない）。
+> - FK カラムには明示的に index を張る（PostgreSQL は自動で張らないため。上記 `delivery_attempts.outbound_message_id` が例）。`ai_drafts` / `message_embeddings` の FK にも同様の index を追加する。
+> - `status` 等の可変ビジネス値は `text` のままとし、`CHECK` 制約または lookup テーブルで値を制限する。
 
 ### `ai_drafts`
 
 ```sql
 create table ai_drafts (
-  id bigserial primary key,
+  id bigint generated always as identity primary key,
   chatwork_room_id text not null references chatwork_rooms(chatwork_room_id),
   source_message_id bigint references chatwork_messages(id),
   slack_channel_id text,
@@ -411,7 +419,7 @@ PostgreSQL に寄せるメリット。
 
 ```sql
 create table message_embeddings (
-  id bigserial primary key,
+  id bigint generated always as identity primary key,
   chatwork_message_id bigint not null references chatwork_messages(id),
   content text not null,
   embedding vector(1536),

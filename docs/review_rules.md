@@ -9,25 +9,32 @@
 - **[MUST] 署名検証**: Chatwork Webhook / Slack request の署名検証が実装され、失敗時に拒否しているか
 - **[MUST] 秘密情報**: `CHATWORK_API_TOKEN` / `SLACK_BOT_TOKEN` / `SLACK_SIGNING_SECRET` / `DATABASE_URL` を secret adapter 経由で取得しているか。ハードコードや workflow への直書きがないか
 - **[MUST] ログ出力**: トークン・接続文字列・メッセージ全文・クライアント名をログ／fixture に出していないか
-- **[MUST] 入力バリデーション**: Webhook・Slack イベント・内部 API の境界で Zod により検証しているか
+- **[MUST] 入力バリデーション**: Webhook・Slack イベント・内部 API の境界で Zod により検証しているか。外部入力に `safeParse` を使い、`JSON.parse` の結果を検証しているか
 - **[MUST] SQL インジェクション**: DB アクセスが Drizzle／パラメータ化クエリ経由か。外部入力を生 SQL に直結していないか
 - **[MUST] 送信前確認**: Slack → Chatwork 送信が即時投稿でなく確認を挟んでいるか
 - **[MUST] 公開エンドポイント最小化**: `/internal/*` が外部から直接叩けない設計か
+- **[MUST] Docker シークレット**: イメージレイヤ/ENV にトークン・接続文字列を焼き込んでいないか
 - **[SHOULD] allowlist / ルーム有効化**: 送信操作の制限・ルーム単位の有効/無効が考慮されているか
 
 ## 2. 型安全・データモデル
 
 - **[MUST] strict モード**: TypeScript strict が有効で、型エラーがないか
 - **[MUST] 命名規則**: ファイル kebab-case / 変数・関数 camelCase / 型・クラス PascalCase / DB カラム snake_case
-- データモデルが overview のスキーマ（unique 制約・index・status 値）と整合しているか
+- **[SHOULD] 型安全**: 固定値が const assertion + union 型か / 相互排他状態が discriminated union か / 識別子に branded type を使っているか / `switch` に never 網羅性チェックがあるか / 型を `z.infer` で導出しているか（型とスキーマの二重定義がないか）
+- **[MUST] 主キー**: `bigint generated always as identity` を使っているか（`serial`/`bigserial` 不使用）
+- **[MUST] FK index**: FK カラムに明示的な index があるか（PostgreSQL は自動で張らない）
+- **[MUST] トランザクション**: 複数ステップの DB 書き込み（outbound + delivery_attempts 等）が `db.transaction()` でまとまっているか
+- **[SHOULD] データ型**: timestamptz / numeric(money) / text を使い、timestamp・varchar(n)・char・serial を避けているか
+- **[SHOULD] status 値**: 可変ビジネス値が text + CHECK / lookup か（enum 型を濫用していないか）
 - 重複防止の unique 制約（`chatwork_room_id, chatwork_message_id`）に依存したロジックが正しいか
 
 ## 3. フレームワークパターン
 
 - **[MUST] アダプタ境界**: 外部 SDK（Chatwork / Slack / queue / secrets / ai）を `src/adapters/{name}/` に閉じ込めているか。routes/services から直接呼んでいないか
 - **[SHOULD] ディレクトリ構成**: `src/adapters` / `src/app`（routes, services）/ `src/db` の構成に従っているか
-- **[SHOULD] Hono**: ルーティング・ミドルウェアが薄い構成か
+- **[SHOULD] Hono**: ルーティング・ミドルウェアが薄い構成か。ルート境界で `@hono/zod-validator` を使っているか
 - **[SHOULD] Drizzle**: DB アクセスが Drizzle 経由・マイグレーションが Drizzle Kit 管理か
+- **[SHOULD] Docker**: multi-stage build / 非 root 実行 / タグ固定（latest 不使用）/ healthcheck / `.dockerignore` が考慮されているか
 
 ## 4. コード品質
 
@@ -35,6 +42,7 @@
 - **[SHOULD]** マジックナンバー・ステータス文字列の定数化、曖昧な命名の回避、DRY/KISS、1関数1責務
 - **[SHOULD]** `console.log`・コメントアウトコード・デッドコードが残っていないか（構造化ロガー使用）
 - **[SHOULD]** import に深い相対パス遡りがないか、未使用 import がないか
+- **[SHOULD] Zod**: `z.any()` を避け `z.unknown()` を使っているか / エラーを `flatten()` で整形しているか
 
 ## 5. テスト
 
