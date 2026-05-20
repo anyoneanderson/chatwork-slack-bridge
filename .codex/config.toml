@@ -1,0 +1,11 @@
+[features]
+multi_agent = true
+
+[agents.workflow-implementer]
+config_file = "agents/workflow-implementer.toml"
+
+[agents.workflow-reviewer]
+config_file = "agents/workflow-reviewer.toml"
+
+[agents.workflow-tester]
+config_file = "agents/workflow-tester.toml"
