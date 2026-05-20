@@ -2,6 +2,10 @@
 handover.md
 .handover/
 
+# Machine-specific agent hook configs (absolute paths; not portable)
+.claude/settings.json
+.codex/hooks.json
+
 # Dependencies
 node_modules/
 .pnpm-store/
