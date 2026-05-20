@@ -1,3 +1,7 @@
+# Agent session handovers
+handover.md
+.handover/
+
 # Dependencies
 node_modules/
 .pnpm-store/
