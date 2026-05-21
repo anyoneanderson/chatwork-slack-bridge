@@ -13,10 +13,10 @@
 ## 2. タスク一覧
 
 ### Phase 1: プロジェクト初期化・ツールチェーン [code]
-- [ ] T001: pnpm / package.json / npm スクリプト整備
-- [ ] T002: tsconfig.json（strict）・パスエイリアス設定
-- [ ] T003: Biome / Vitest / 各設定ファイル
-- [ ] T004: リポジトリ補助ファイル（.gitignore / .env.example / .dockerignore）
+- [x] T001: pnpm / package.json / npm スクリプト整備
+- [x] T002: tsconfig.json（strict）・パスエイリアス設定
+- [x] T003: Biome / Vitest / 各設定ファイル
+- [x] T004: リポジトリ補助ファイル（.gitignore / .env.example / .dockerignore）
 
 ### Phase 1-R: 初期化 レビューゲート [orchestrator]
 - [ ] T004-R: Phase 1 の spec-review + spec-test 実行（設定の妥当性・`pnpm install`/lint/typecheck 確認）
