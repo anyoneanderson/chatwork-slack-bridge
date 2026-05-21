@@ -43,7 +43,7 @@
 
 ### Phase 4: 最終品質ゲート・受け入れ確認・PR [orchestrator]
 - [x] T015: Final Quality Gate（lint / typecheck / test 一括 + 受け入れ基準確認）
-- [ ] T016: PR 作成（Issue #1 紐付け）
+- [x] T016: PR 作成（Issue #1 紐付け）
 
 ## 3. タスク詳細
 
