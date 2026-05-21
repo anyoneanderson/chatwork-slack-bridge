@@ -25,13 +25,13 @@ Slack App / Chatwork webhook・API トークンは手動プロビジョニング
 - [x] T003-R: Phase 1 の spec-review + spec-test（スキーマが coding-rules `[MUST]` 準拠 / 既存 secret IF 非破壊 / 秘密非ログ / migration 適用確認 / **必須化した新 config が deploy workflow・deploy docs に反映され本番起動が壊れない**）
 
 ### Phase 2: chatwork adapter（署名検証 / payload / client）[code]
-- [ ] T004: [REQ-002] `adapters/chatwork/verify-signature.ts`（HMAC-SHA256 / base64 / `timingSafeEqual` / 長さ事前チェック）
-- [ ] T005: [REQ-003] `adapters/chatwork/webhook-schema.ts`（Zod payload / `message_created` 判定）+ `types.ts`（branded type / `ROOM_TYPES`）
-- [ ] T006: [REQ-006] `adapters/chatwork/client.ts`（`getRoom` = `GET /rooms/{id}` 薄い client / `X-ChatWorkToken` / エラー型）
-- [ ] T007: [NFR-002] 署名検証ユニットテスト（正当 / 改竄 / ヘッダ欠落 / base64 不正 / 長さ不一致）+ schema テスト
+- [x] T004: [REQ-002] `adapters/chatwork/verify-signature.ts`（HMAC-SHA256 / base64 / `timingSafeEqual` / 長さ事前チェック）
+- [x] T005: [REQ-003] `adapters/chatwork/webhook-schema.ts`（Zod payload / `message_created` 判定）+ `types.ts`（branded type / `ROOM_TYPES`）
+- [x] T006: [REQ-006] `adapters/chatwork/client.ts`（`getRoom` = `GET /rooms/{id}` 薄い client / `X-ChatWorkToken` / エラー型）
+- [x] T007: [NFR-002] 署名検証ユニットテスト（正当 / 改竄 / ヘッダ欠落 / base64 不正 / 長さ不一致）+ schema テスト
 
 ### Phase 2-R: chatwork adapter レビューゲート [orchestrator]
-- [ ] T007-R: Phase 2 の spec-review + spec-test（署名検証が raw body 対象 / timing-safe / safeParse / トークン非ログ / 署名テスト網羅）
+- [x] T007-R: Phase 2 の spec-review + spec-test（署名検証が raw body 対象 / timing-safe / safeParse / トークン非ログ / 署名テスト網羅）
 
 ### Phase 3: slack adapter（整形 / 投稿）[code]
 - [ ] T008: [REQ-008] `@slack/web-api` 依存追加 + `adapters/slack/client.ts`（`postMessage` → `{ ts }` / `SlackApiError`）+ `types.ts`
