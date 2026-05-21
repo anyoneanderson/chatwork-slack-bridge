@@ -20,6 +20,8 @@ function createTestDeps(ping: DbClient["ping"]) {
     LOG_LEVEL: "info",
     NODE_ENV: "test",
     DB_HEALTH_TIMEOUT_MS: 123,
+    SECRET_BACKEND: "env",
+    DB_POOLED: false,
   };
   const db = {
     db: {},

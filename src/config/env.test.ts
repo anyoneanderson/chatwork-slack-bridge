@@ -62,6 +62,40 @@ describe("loadConfig", () => {
       LOG_LEVEL: "info",
       NODE_ENV: "development",
       DB_HEALTH_TIMEOUT_MS: 2000,
+      SECRET_BACKEND: "env",
+      DB_POOLED: false,
     });
+  });
+
+  it("throws ConfigError when SECRET_BACKEND=gcp but reference keys are missing", () => {
+    try {
+      loadConfig(
+        createSecretProvider({
+          DATABASE_URL: "postgres://bridge_user:bridge_pass@localhost:5432/bridge",
+          SECRET_BACKEND: "gcp",
+        }),
+      );
+      throw new Error("loadConfig should throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigError);
+      const configError = err as ConfigError;
+      expect(configError.issues).toHaveProperty("GOOGLE_CLOUD_PROJECT");
+      expect(configError.issues).toHaveProperty("DATABASE_URL_SECRET");
+    }
+  });
+
+  it("returns Config when SECRET_BACKEND=gcp and reference keys are present", () => {
+    const config = loadConfig(
+      createSecretProvider({
+        DATABASE_URL: "postgres://bridge_user:bridge_pass@localhost:5432/bridge",
+        SECRET_BACKEND: "gcp",
+        GOOGLE_CLOUD_PROJECT: "example-project",
+        DATABASE_URL_SECRET: "example-database-url-secret",
+        DB_POOLED: "true",
+      }),
+    );
+
+    expect(config.SECRET_BACKEND).toBe("gcp");
+    expect(config.DB_POOLED).toBe(true);
   });
 });
