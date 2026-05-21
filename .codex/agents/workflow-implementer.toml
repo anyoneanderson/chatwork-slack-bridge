@@ -1,4 +1,5 @@
-model = "gpt-5.3-codex"
+name = "workflow-implementer"
+description = "生成されたワークフローとコーディングルールに従ってプロダクションコードを書く実装エージェント。"
 
 developer_instructions = """
 あなたは実装エージェントです。プロジェクトのコーディングルールとワークフローに従ってプロダクションコードを書いてください。

@@ -1,7 +1,7 @@
 # Issue to PR ワークフローガイド
 
 > spec-workflow-init により自動生成されました。
-> 生成日時: 2026-05-20 17:09
+> 生成日時: 2026-05-21 12:30（スキル更新に伴い再生成: ランタイム組み込みマルチエージェント / セカンドオピニオン毎回）
 
 ## ワークフロー概要
 
@@ -44,11 +44,13 @@ Issueを注意深く読み、以下を特定する:
 
 ### 仕様書の確認
 
+仕様はフェーズ単位で分割されている（1 spec = 1 Feature Issue）。対象フェーズの spec を読む。
+
 ```bash
-ls .specs/chatwork-slack-bridge/
-cat .specs/chatwork-slack-bridge/requirement.md
-cat .specs/chatwork-slack-bridge/design.md
-cat .specs/chatwork-slack-bridge/tasks.md
+ls .specs/{feature}/          # 例: .specs/foundation/
+cat .specs/{feature}/requirement.md
+cat .specs/{feature}/design.md
+cat .specs/{feature}/tasks.md
 ```
 
 ### featureブランチの作成
@@ -56,10 +58,10 @@ cat .specs/chatwork-slack-bridge/tasks.md
 ```bash
 git checkout main
 git pull origin main
-git checkout -b feat/42-chatwork-webhook
+git checkout -b feat/1-foundation
 ```
 
-> ブランチ名は `{type}/{issue}-{slug}` 形式（例: `feat/42-chatwork-webhook`, `fix/43-signature-verify`）。
+> ブランチ名は `{type}/{issue}-{slug}` 形式（例: `feat/1-foundation`, `fix/43-signature-verify`）。
 > `type` は Conventional Commits に揃える（`feat`, `fix`, `chore`, `docs`, `refactor`, `test`）。
 
 ## 2. 環境構築
@@ -75,7 +77,7 @@ pnpm install
 pnpm db:migrate
 ```
 
-> 秘密情報（`CHATWORK_API_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `DATABASE_URL`）はローカルでは `.env` で管理し、コミットしないこと（coding-rules.md セキュリティ参照）。
+> 秘密情報（`CHATWORK_API_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `DATABASE_URL`）はローカルでは `.env` で管理し、コミットしないこと（`docs/coding-rules.md` セキュリティ参照）。
 
 ## 3. 段階的実装
 
@@ -120,7 +122,7 @@ pnpm dev
 6. 3回目で未解消の重大指摘 → ユーザーに判断を委ねる
 7. レビューパス → 次の Phase へ
 
-セカンドオピニオンを **毎回** 実施する。cmux-second-opinion で別AI（Codex）にレビューを依頼し、review_rules.md を基準に独立レビューさせる。
+セカンドオピニオンを **毎回** 実施する。cmux-second-opinion で別AI（Codex）にレビューを依頼し、`docs/review_rules.md` を基準に独立レビューさせる。
 
 ### Phase 4: テスト実装
 
@@ -150,8 +152,8 @@ pnpm test
 ```bash
 pnpm lint
 pnpm typecheck
+pnpm build
 pnpm test
-pnpm test:coverage
 ```
 
 ## 4. テスト
@@ -174,6 +176,7 @@ pnpm test:e2e
 - [ ] 全テスト通過: `pnpm test`
 - [ ] Lint通過: `pnpm lint`
 - [ ] 型チェック通過: `pnpm typecheck`
+- [ ] ビルド成功: `pnpm build`
 - [ ] カバレッジ基準（80%以上）達成: `pnpm test:coverage`
 - [ ] 秘密情報・実値（実Slack/ChatworkのID、クライアント名、本文ログ）が含まれていない
 
@@ -189,11 +192,11 @@ gh pr create --base main --title "feat: {description} (closes #{issue_number})" 
 
 ## 関連
 - Closes #{issue_number}
-- 仕様書: .specs/chatwork-slack-bridge/
+- 仕様書: .specs/{feature}/
 "
 ```
 
-> このディレクトリは `~/Documents/zenchaine/` 配下のため、`gh` / `git` は **anyoneanderson** アカウントを使用する。GitHub MCP 操作には `github-zenchaine` を使うこと（CLAUDE.md 参照）。
+> このディレクトリは `~/Documents/zenchaine/` 配下のため、`gh` / `git` は **anyoneanderson** アカウントを使用する。GitHub MCP 操作には `github-zenchaine` を使うこと（CLAUDE.md 参照）。Claude Code は direnv が効かないため、`gh` 実行前に `gh api user --jq '.login'` で確認する。
 
 ## 6. CI/CD確認
 
@@ -219,7 +222,7 @@ CIが失敗した場合:
    ```
 4. CIを再度監視
 
-## エージェントロール
+## エージェントロール（オプション）
 
 ### マルチエージェント役割分担戦略
 
@@ -250,20 +253,12 @@ CIが失敗した場合:
 - `.codex/agents/workflow-reviewer.toml` — レビューエージェント
 - `.codex/agents/workflow-tester.toml` — テストエージェント
 
-## ディスパッチ戦略
+### ランタイム組み込みディスパッチ
 
-- **方式**: cmux
-- **実装・テスト**: cmux-delegate で別ペインの Codex に委任
-- **レビュー**: cmux-second-opinion で別AI（Claude）に委任
-- **前提条件**: CMUX_SOCKET_PATH が設定されていること
-
-### cmux ディスパッチのフロー
-
-1. `CMUX_SOCKET_PATH` を確認
-2. cmux-delegate で実装者/テスター（Codex）を別ペインに起動
-3. 実装/テスト完了を検知
-4. cmux-second-opinion でレビューを別AI（Claude）に委任（毎回実施）
-5. 結果を統合してPR作成
+- **Codex**: `.codex/agents/workflow-*.toml` の custom agent を使用する。`エージェント` 列の名前で agent を起動し、タスク固有のコンテキストだけを渡す。
+- **Claude Code**: `.claude/agents/workflow-*.md` を Claude Code agent team として使用する。Claude Code に、`エージェント` 列の名前に基づく teammate を持つ agent team を作成するよう依頼し、各 teammate にはタスク固有のコンテキストだけを渡す。`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` が必要。
+- **セカンドオピニオン**: 上記の役割分担とは別に、各レビューゲートで cmux-second-opinion により別AI（Codex）の独立レビューを **毎回** 実施する。
+- **フォールバック**: ランタイム組み込み agent が使えない場合は順次実行するか、明示選択された場合のみ cmux dispatch を使う。
 
 ---
 

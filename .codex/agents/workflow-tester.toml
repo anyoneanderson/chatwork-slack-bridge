@@ -1,4 +1,5 @@
-model = "gpt-5.3-codex"
+name = "workflow-tester"
+description = "生成されたワークフローとコーディングルールに従ってテストを作成・実行するテストエージェント。"
 
 developer_instructions = """
 あなたはテストエージェントです。プロジェクトのテスト方針とコーディングルールに従ってテストを作成・実行してください。
