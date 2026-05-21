@@ -15,8 +15,15 @@ export const ConfigSchema = z
     GOOGLE_CLOUD_PROJECT: z.string().optional(),
     /** DATABASE_URL を格納する Secret Manager のシークレット名。gcp のとき必須。 */
     DATABASE_URL_SECRET: z.string().optional(),
-    /** Neon pooled connection 利用時に true。postgres.js の prepare:false を有効化する。 */
-    DB_POOLED: z.coerce.boolean().default(false),
+    /**
+     * Neon pooled connection 利用時に true。postgres.js の prepare:false を有効化する。
+     * 環境変数は文字列のため厳密判定する（`z.coerce.boolean()` は "false" も true 化するため不可）。
+     * 既定は未設定 → false。"true"/"1" のみ true。
+     */
+    DB_POOLED: z
+      .enum(["true", "false", "1", "0"])
+      .default("false")
+      .transform((v) => v === "true" || v === "1"),
   })
   .superRefine((config, ctx) => {
     if (config.SECRET_BACKEND !== "gcp") {

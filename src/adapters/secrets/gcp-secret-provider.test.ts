@@ -118,4 +118,40 @@ describe("createGcpSecretProvider", () => {
     expect(provider.get("DATABASE_URL")).toBe(DATABASE_URL_VALUE);
     expect(accessSecretVersionMock).toHaveBeenCalledTimes(2);
   });
+
+  it("wraps a persistent SDK failure in SecretAccessError without leaking the secret name", async () => {
+    vi.useFakeTimers();
+
+    // SDK の生エラーにはリソース名（projects/.../secrets/<name>/...）が含まれうる。
+    const sdkError = new Error(
+      `5 NOT_FOUND: Secret [projects/p/secrets/${DATABASE_URL_SECRET}/versions/latest] not found`,
+    );
+    accessSecretVersionMock.mockRejectedValue(sdkError);
+
+    const promise = createGcpSecretProvider(buildOptions());
+    const captured = promise.catch((err: unknown) => err);
+    // バックオフ待機を全て消化させ、リトライを打ち切らせる。
+    await vi.runAllTimersAsync();
+
+    const err = (await captured) as SecretAccessError;
+    expect(err).toBeInstanceOf(SecretAccessError);
+    expect(err.key).toBe("DATABASE_URL");
+
+    // 例外のメッセージ・直列化全体・cause にシークレット名を残さない（NFR-001 / NFR-007）。
+    const serialized = JSON.stringify({
+      message: err.message,
+      name: err.name,
+      key: err.key,
+      cause: (err as { cause?: unknown }).cause ?? null,
+      stack: err.stack,
+    });
+    expect(err.message).not.toContain(DATABASE_URL_SECRET);
+    expect(serialized).not.toContain(DATABASE_URL_SECRET);
+    expect((err as { cause?: unknown }).cause).toBeUndefined();
+
+    // retries:2 → 初回 + リトライ 2 回 = 最大 3 回で打ち切り。
+    expect(accessSecretVersionMock).toHaveBeenCalledTimes(3);
+
+    vi.useRealTimers();
+  });
 });

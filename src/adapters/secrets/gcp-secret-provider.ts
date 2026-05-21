@@ -38,8 +38,10 @@ export interface GcpSecretProviderOptions {
  *
  * @param options プロジェクト ID・シークレット名マッピング・バージョン・タイムアウト
  * @returns プリフェッチ済みの同期 `SecretProvider`
- * @throws SecretAccessError 対象シークレットが missing / 空 payload の場合（env フォールバックしない）
- * @throws TimeoutError Secret Manager 呼び出しが上限時間内に完了しない場合（リトライ後）
+ * @throws SecretAccessError 対象シークレットが missing / 空 payload の場合、または
+ *   Secret Manager 呼び出しが（タイムアウト・NotFound・PermissionDenied・ネットワーク等で）
+ *   リトライ後も失敗した場合。SDK の生エラーは re-throw せずキー区分のみを保持して包み直す
+ *   （リソース名 `projects/.../secrets/<name>/...` をログ・エラーに漏らさない／NFR-001・NFR-007）。
  */
 export async function createGcpSecretProvider(
   options: GcpSecretProviderOptions,
@@ -52,13 +54,21 @@ export async function createGcpSecretProvider(
 
   for (const key of SECRET_MANAGER_KEYS) {
     const name = `projects/${options.projectId}/secrets/${options.secretNames[key]}/versions/${version}`;
-    // bounded timeout + retry（指数バックオフ・最大 2 回）でアクセス（NFR-007）。
-    const [secretVersion] = await withRetry(
-      () => withTimeout(client.accessSecretVersion({ name }), timeoutMs, "secret.access"),
-      { retries: SECRET_ACCESS_RETRIES },
-    );
 
-    const payload = secretVersion.payload?.data?.toString();
+    let payload: string | undefined;
+    try {
+      // bounded timeout + retry（指数バックオフ・最大 2 回）でアクセス（NFR-007）。
+      const [secretVersion] = await withRetry(
+        () => withTimeout(client.accessSecretVersion({ name }), timeoutMs, "secret.access"),
+        { retries: SECRET_ACCESS_RETRIES },
+      );
+      payload = secretVersion.payload?.data?.toString();
+    } catch {
+      // SDK の生エラーには `projects/.../secrets/<name>/...` のリソース名が含まれうるため、
+      // そのまま re-throw せずキー区分のみを保持して包み直す（cause にも生エラー・name を残さない）。
+      throw new SecretAccessError(key);
+    }
+
     // missing / 空 payload は env フォールバックせず起動を中断する（壊れた Secret を成功扱いしない）。
     if (!payload) {
       // キー区分のみ保持。値・name はログ・エラーに残さない（NFR-001）。

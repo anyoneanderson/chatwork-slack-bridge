@@ -22,7 +22,7 @@ GCP リソース（プロジェクト / WIF / Artifact Registry / Secret / Neon�
 - [x] T003: [REQ-002] secret provider factory（`SECRET_BACKEND` で env/gcp 切替）
 - [x] T004: [REQ-003] DB クライアントの pooled 対応（`prepare:false` オプション）
 - [x] T005: [REQ-006] `src/index.ts` の async bootstrap 化（factory await / 失敗時 exit / shutdown 維持）
-- [ ] T006: [NFR-004] ユニットテスト（factory / gcp provider モック / db client pooled）
+- [x] T006: [NFR-004] ユニットテスト（factory / gcp provider モック / db client pooled）
 
 ### Phase 1-R: アプリ対応 レビューゲート [orchestrator]
 - [ ] T006-R: Phase 1 の spec-review + spec-test（アダプタ境界 / 同期 IF 維持 / 秘密非ログ / カバレッジ 80%）

@@ -98,4 +98,47 @@ describe("loadConfig", () => {
     expect(config.SECRET_BACKEND).toBe("gcp");
     expect(config.DB_POOLED).toBe(true);
   });
+
+  it('coerces DB_POOLED="false" to false (not truthy string coercion)', () => {
+    const config = loadConfig(
+      createSecretProvider({
+        DATABASE_URL: "postgres://bridge_user:bridge_pass@localhost:5432/bridge",
+        DB_POOLED: "false",
+      }),
+    );
+
+    expect(config.DB_POOLED).toBe(false);
+  });
+
+  it('coerces DB_POOLED="0" to false', () => {
+    const config = loadConfig(
+      createSecretProvider({
+        DATABASE_URL: "postgres://bridge_user:bridge_pass@localhost:5432/bridge",
+        DB_POOLED: "0",
+      }),
+    );
+
+    expect(config.DB_POOLED).toBe(false);
+  });
+
+  it('coerces DB_POOLED="1" to true', () => {
+    const config = loadConfig(
+      createSecretProvider({
+        DATABASE_URL: "postgres://bridge_user:bridge_pass@localhost:5432/bridge",
+        DB_POOLED: "1",
+      }),
+    );
+
+    expect(config.DB_POOLED).toBe(true);
+  });
+
+  it("defaults DB_POOLED to false when unset", () => {
+    const config = loadConfig(
+      createSecretProvider({
+        DATABASE_URL: "postgres://bridge_user:bridge_pass@localhost:5432/bridge",
+      }),
+    );
+
+    expect(config.DB_POOLED).toBe(false);
+  });
 });
