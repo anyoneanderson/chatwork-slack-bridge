@@ -51,8 +51,8 @@ Slack App / Chatwork webhook・API トークンは手動プロビジョニング
 - [x] T013-R: Phase 4 の spec-review + spec-test（冪等性 / FK 順序・my 保存前 skip / 整合性方針 / アダプタ境界 / 公開エンドポイント最小 / ルーティング網羅 / **overview 更新漏れ確認** / カバレッジ 80%）
 
 ### Phase 5: 最終品質ゲート・受け入れ確認・PR [orchestrator]
-- [ ] T014: Final Quality Gate（`pnpm lint` / `pnpm typecheck` / `pnpm test` 一括 + 受け入れ基準確認 + **overview 更新の反映確認** + 受け入れ確認（実 Slack API 手動確認 と モック/fake adapter 確認を分離。CON-005））
-- [ ] T015: PR 作成（Issue #3 紐付け）
+- [x] T014: Final Quality Gate（`pnpm lint` / `pnpm typecheck` / `pnpm test` 一括 + 受け入れ基準確認 + **overview 更新の反映確認** + 受け入れ確認（実 Slack API 手動確認 と モック/fake adapter 確認を分離。CON-005））
+- [x] T015: PR 作成（Issue #3 紐付け）
 
 ## 2.1 優先度・実装順
 
