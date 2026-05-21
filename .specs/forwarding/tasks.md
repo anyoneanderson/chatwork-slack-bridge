@@ -34,11 +34,11 @@ Slack App / Chatwork webhook・API トークンは手動プロビジョニング
 - [x] T007-R: Phase 2 の spec-review + spec-test（署名検証が raw body 対象 / timing-safe / safeParse / トークン非ログ / 署名テスト網羅）
 
 ### Phase 3: slack adapter（整形 / 投稿）[code]
-- [ ] T008: [REQ-008] `@slack/web-api` 依存追加 + `adapters/slack/client.ts`（`postMessage` → `{ ts }` / `SlackApiError`）+ `types.ts`
-- [ ] T009: [REQ-008] `adapters/slack/format.ts`（ルーム名・送信者・本文の整形。アクションボタンは含めない）+ 整形ユニットテスト
+- [x] T008: [REQ-008] `@slack/web-api` 依存追加 + `adapters/slack/client.ts`（`postMessage` → `{ ts }` / `SlackApiError`）+ `types.ts`
+- [x] T009: [REQ-008] `adapters/slack/format.ts`（ルーム名・送信者・本文の整形。アクションボタンは含めない）+ 整形ユニットテスト
 
 ### Phase 3-R: slack adapter レビューゲート [orchestrator]
-- [ ] T009-R: Phase 3 の spec-review + spec-test（slack アダプタ境界遵守 / ボタン非表示 / トークン非ログ）
+- [x] T009-R: Phase 3 の spec-review + spec-test（slack アダプタ境界遵守 / ボタン非表示 / トークン非ログ）
 
 ### Phase 4: サービス・ルート結線 [code]
 - [ ] T010: [REQ-007] `app/services/resolve-target.ts`（ルーティング判定 / discriminated union / `never` 網羅）+ 全分岐テスト
