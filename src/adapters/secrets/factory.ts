@@ -31,11 +31,15 @@ export class SecretConfigError extends Error {
  * `env`（既定）はローカル / compose 向けの `EnvSecretProvider` を同期的に返す。
  * `gcp` は Secret Manager から対象シークレットをプリフェッチした同期 `SecretProvider` を返す。
  *
- * backend 判定に必要な `SECRET_BACKEND` / `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` は
- * secret provider 構築前に必要なため、`process.env` から直接読む（参照情報・スイッチであり秘密の実値ではない）。
+ * backend 判定・Secret Manager 参照に必要な `SECRET_BACKEND` / `GOOGLE_CLOUD_PROJECT` /
+ * `DATABASE_URL_SECRET` / `CHATWORK_WEBHOOK_TOKEN_SECRET` / `CHATWORK_API_TOKEN_SECRET` /
+ * `SLACK_BOT_TOKEN_SECRET` は secret provider 構築前に必要なため、`process.env` から直接読む
+ * （シークレット名・スイッチであり秘密の実値ではない）。
  *
  * @returns 構築済みの `SecretProvider`
- * @throws SecretConfigError gcp backend で `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` が欠落している場合（キー名のみ保持）
+ * @throws SecretConfigError gcp backend で `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` /
+ *   `CHATWORK_WEBHOOK_TOKEN_SECRET` / `CHATWORK_API_TOKEN_SECRET` / `SLACK_BOT_TOKEN_SECRET` が
+ *   欠落している場合（キー名のみ保持）
  * @throws SecretAccessError gcp backend で Secret Manager アクセスに失敗した場合（`createGcpSecretProvider` 由来）
  */
 export async function createSecretProvider(): Promise<SecretProvider> {
@@ -46,6 +50,10 @@ export async function createSecretProvider(): Promise<SecretProvider> {
 
   const projectId = process.env.GOOGLE_CLOUD_PROJECT;
   const databaseUrlSecret = process.env.DATABASE_URL_SECRET;
+  // トークン系秘密の Secret Manager シークレット名（DATABASE_URL_SECRET と同じ仕組み）。
+  const chatworkWebhookTokenSecret = process.env.CHATWORK_WEBHOOK_TOKEN_SECRET;
+  const chatworkApiTokenSecret = process.env.CHATWORK_API_TOKEN_SECRET;
+  const slackBotTokenSecret = process.env.SLACK_BOT_TOKEN_SECRET;
 
   // 欠落キー名のみを収集する。値（プロジェクト ID・シークレット名）はエラーに含めない。
   const missingKeys: string[] = [];
@@ -55,12 +63,32 @@ export async function createSecretProvider(): Promise<SecretProvider> {
   if (!databaseUrlSecret) {
     missingKeys.push("DATABASE_URL_SECRET");
   }
-  if (!projectId || !databaseUrlSecret) {
+  if (!chatworkWebhookTokenSecret) {
+    missingKeys.push("CHATWORK_WEBHOOK_TOKEN_SECRET");
+  }
+  if (!chatworkApiTokenSecret) {
+    missingKeys.push("CHATWORK_API_TOKEN_SECRET");
+  }
+  if (!slackBotTokenSecret) {
+    missingKeys.push("SLACK_BOT_TOKEN_SECRET");
+  }
+  if (
+    !projectId ||
+    !databaseUrlSecret ||
+    !chatworkWebhookTokenSecret ||
+    !chatworkApiTokenSecret ||
+    !slackBotTokenSecret
+  ) {
     throw new SecretConfigError(missingKeys);
   }
 
   return createGcpSecretProvider({
     projectId,
-    secretNames: { DATABASE_URL: databaseUrlSecret },
+    secretNames: {
+      DATABASE_URL: databaseUrlSecret,
+      CHATWORK_WEBHOOK_TOKEN: chatworkWebhookTokenSecret,
+      CHATWORK_API_TOKEN: chatworkApiTokenSecret,
+      SLACK_BOT_TOKEN: slackBotTokenSecret,
+    },
   });
 }

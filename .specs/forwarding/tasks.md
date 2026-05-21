@@ -17,12 +17,12 @@ Slack App / Chatwork webhook・API トークンは手動プロビジョニング
 ## 2. タスク一覧
 
 ### Phase 1: スキーマ・secret/config 基盤 [code]
-- [ ] T001: [REQ-004] `db/schema.ts` に `chatwork_rooms` / `chatwork_messages` を定義（identity PK / timestamptz / room_type・status の CHECK / FK index / unique 制約）
-- [ ] T002: [REQ-004] `pnpm db:generate` で migration 生成・`pnpm db:migrate` で適用確認（compose 上）
-- [ ] T003: [REQ-009] secret/config 拡張（`SECRET_KEYS` union + `ConfigSchema` に `CHATWORK_WEBHOOK_TOKEN`/`CHATWORK_API_TOKEN`/`SLACK_BOT_TOKEN`/`SLACK_DEFAULT_GROUP_CHANNEL_ID`/`SLACK_DEFAULT_DM_CHANNEL_ID` 追加、`.env.example` 追記、factory の gcp prefetch 拡張）
+- [x] T001: [REQ-004] `db/schema.ts` に `chatwork_rooms` / `chatwork_messages` を定義（identity PK / timestamptz / room_type・status の CHECK / FK index / unique 制約）
+- [x] T002: [REQ-004] `pnpm db:generate` で migration 生成・`pnpm db:migrate` で適用確認（compose 上）
+- [x] T003: [REQ-009] secret/config 拡張（`SECRET_KEYS` union + `ConfigSchema` に `CHATWORK_WEBHOOK_TOKEN`/`CHATWORK_API_TOKEN`/`SLACK_BOT_TOKEN`/`SLACK_DEFAULT_GROUP_CHANNEL_ID`/`SLACK_DEFAULT_DM_CHANNEL_ID` 追加、`.env.example` 追記、factory の gcp prefetch 拡張、**logger redact に新トークン追加**、**Cloud Run deploy workflow（`.github/workflows/deploy-cloud-run.yml`）と deploy docs（`docs/deploy/{cloud-run,docker}.md`）に新 env/Secret を反映** — 必須化により本番起動が壊れないようにする。※Phase 1-R 二次レビュー（Codex）で検出した重大ギャップ）
 
 ### Phase 1-R: 基盤 レビューゲート [orchestrator]
-- [ ] T003-R: Phase 1 の spec-review + spec-test（スキーマが coding-rules `[MUST]` 準拠 / 既存 secret IF 非破壊 / 秘密非ログ / migration 適用確認）
+- [x] T003-R: Phase 1 の spec-review + spec-test（スキーマが coding-rules `[MUST]` 準拠 / 既存 secret IF 非破壊 / 秘密非ログ / migration 適用確認 / **必須化した新 config が deploy workflow・deploy docs に反映され本番起動が壊れない**）
 
 ### Phase 2: chatwork adapter（署名検証 / payload / client）[code]
 - [ ] T004: [REQ-002] `adapters/chatwork/verify-signature.ts`（HMAC-SHA256 / base64 / `timingSafeEqual` / 長さ事前チェック）

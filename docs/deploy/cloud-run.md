@@ -20,6 +20,11 @@ Chatwork Slack Bridge を Google Cloud Run へデプロイするための、初�
 | `<WIF_PROVIDER_ID>` | Workload Identity プロバイダ ID |
 | `<WIF_PROVIDER_RESOURCE>` | WIF プロバイダのフルリソース名（GitHub variable に設定する値） |
 | `<DB_URL_SECRET_NAME>` | Secret Manager 上の `DATABASE_URL` シークレット名 |
+| `<CHATWORK_WEBHOOK_TOKEN_SECRET_NAME>` | Secret Manager 上の Chatwork Webhook 署名トークンのシークレット名 |
+| `<CHATWORK_API_TOKEN_SECRET_NAME>` | Secret Manager 上の Chatwork API トークンのシークレット名 |
+| `<SLACK_BOT_TOKEN_SECRET_NAME>` | Secret Manager 上の Slack Bot トークンのシークレット名 |
+| `<SLACK_DEFAULT_GROUP_CHANNEL_ID>` | group 種別の集約フォールバック Slack チャンネル ID（秘密ではない設定値） |
+| `<SLACK_DEFAULT_DM_CHANNEL_ID>` | direct 種別の集約フォールバック Slack チャンネル ID（秘密ではない設定値） |
 | `<GITHUB_OWNER>/<GITHUB_REPO>` | GitHub リポジトリ（`anyoneanderson/chatwork-slack-bridge`） |
 
 リージョンは **`asia-northeast1`** に固定する（workflow の `env.GAR_REGION` / `env.CLOUD_RUN_REGION` と一致）。
@@ -37,8 +42,13 @@ Chatwork Slack Bridge を Google Cloud Run へデプロイするための、初�
 | 5 | デプロイ用 SA | workflow が WIF で impersonate し、build/migrate/deploy を行う | `GCP_DEPLOY_SERVICE_ACCOUNT` |
 | 6 | 実行 SA（Cloud Run runtime） | Cloud Run コンテナの ID。Secret Manager から `DATABASE_URL` を取得する | `CLOUD_RUN_SERVICE_ACCOUNT` |
 | 7 | Secret Manager シークレット（`DATABASE_URL`） | Neon 接続文字列の保管。実行 SA が実行時に取得 | `DATABASE_URL_SECRET` |
+| 7b | Secret Manager シークレット（Chatwork Webhook トークン） | Webhook 署名検証トークンの保管。実行 SA が実行時に取得 | `CHATWORK_WEBHOOK_TOKEN_SECRET` |
+| 7c | Secret Manager シークレット（Chatwork API トークン） | `GET /rooms` 等の Chatwork API トークン。実行 SA が実行時に取得 | `CHATWORK_API_TOKEN_SECRET` |
+| 7d | Secret Manager シークレット（Slack Bot トークン） | Slack 投稿用 Bot トークン。実行 SA が実行時に取得 | `SLACK_BOT_TOKEN_SECRET` |
 | 8 | Cloud Run サービス | アプリの公開先（初回 deploy で自動作成される） | `CLOUD_RUN_SERVICE` |
 | 9 | Neon PostgreSQL | アプリ DB（pooled 接続）。GCP リソースではないが前提 | （`DATABASE_URL` 経由） |
+
+> Slack の集約フォールバックチャンネル ID（`SLACK_DEFAULT_GROUP_CHANNEL_ID` / `SLACK_DEFAULT_DM_CHANNEL_ID`）は秘密ではない設定値のため Secret Manager ではなく GitHub variable（`--set-env-vars` 経由）で渡す。
 
 > **WIF を使うため、SA の JSON 鍵は発行・保管しない。** GitHub には秘密の実値を一切置かず、`vars.*`（repository variables）に参照情報のみを設定する。
 
@@ -118,14 +128,23 @@ gcloud iam service-accounts add-iam-policy-binding "<RUNTIME_SA_EMAIL>" \
 
 シークレット単位に絞って付与する（最小権限）:
 
+forwarding フェーズで追加した 3 つのトークンシークレットも、起動時の gcp factory プリフェッチ対象のため**同じ実行 SA に `secretAccessor` を付与する**:
+
 ```bash
-gcloud secrets add-iam-policy-binding "<DB_URL_SECRET_NAME>" \
-  --member="serviceAccount:<RUNTIME_SA_EMAIL>" \
-  --role="roles/secretmanager.secretAccessor" \
-  --project="<PROJECT_ID>"
+for secret in \
+  "<DB_URL_SECRET_NAME>" \
+  "<CHATWORK_WEBHOOK_TOKEN_SECRET_NAME>" \
+  "<CHATWORK_API_TOKEN_SECRET_NAME>" \
+  "<SLACK_BOT_TOKEN_SECRET_NAME>"; do
+  gcloud secrets add-iam-policy-binding "${secret}" \
+    --member="serviceAccount:<RUNTIME_SA_EMAIL>" \
+    --role="roles/secretmanager.secretAccessor" \
+    --project="<PROJECT_ID>"
+done
 ```
 
 > この権限が無いと Cloud Run 起動時の secret プリフェッチが失敗し、`/health` も 200 を返さない（デプロイが失敗扱いになる）。
+> 4 シークレットのいずれか 1 つでもアクセス不可だと gcp factory が `SecretAccessError` で起動を中断する。
 
 ## 2. Workload Identity Federation（WIF）の設定
 
@@ -185,6 +204,29 @@ printf '%s' '<NEON_DATABASE_URL>' | gcloud secrets versions add "<DB_URL_SECRET_
 
 シークレットを更新したら（ローテーション含む）、新しいバージョンが `latest` になる。Cloud Run は次回起動時（新リビジョン）にプリフェッチする。
 
+### 3.1 forwarding フェーズのトークンシークレット登録
+
+forwarding フェーズで、Chatwork / Slack のトークンも Secret Manager に登録する（`DATABASE_URL` と同じ手順・**実値はログ/履歴に残さない**）。Slack チャンネル ID は秘密ではないため Secret Manager には入れず、GitHub variable で渡す（[4 章](#4-必要な-github-repository-variables-一覧)）。
+
+```bash
+# トークンごとにシークレット本体を作成し、値を標準入力から登録する
+for name in \
+  "<CHATWORK_WEBHOOK_TOKEN_SECRET_NAME>" \
+  "<CHATWORK_API_TOKEN_SECRET_NAME>" \
+  "<SLACK_BOT_TOKEN_SECRET_NAME>"; do
+  gcloud secrets create "${name}" \
+    --replication-policy="automatic" \
+    --project="<PROJECT_ID>"
+done
+
+# 値の登録例（各トークンの実値に置き換える。シェル履歴に残さないよう注意）
+printf '%s' '<CHATWORK_WEBHOOK_TOKEN_VALUE>' | gcloud secrets versions add "<CHATWORK_WEBHOOK_TOKEN_SECRET_NAME>" --data-file=- --project="<PROJECT_ID>"
+printf '%s' '<CHATWORK_API_TOKEN_VALUE>'     | gcloud secrets versions add "<CHATWORK_API_TOKEN_SECRET_NAME>"     --data-file=- --project="<PROJECT_ID>"
+printf '%s' '<SLACK_BOT_TOKEN_VALUE>'        | gcloud secrets versions add "<SLACK_BOT_TOKEN_SECRET_NAME>"        --data-file=- --project="<PROJECT_ID>"
+```
+
+> 実行 SA への `secretAccessor` 付与は [1.4 章](#14-実行-sa-への-rolessecretmanagersecretaccessor-付与必須)のループに含まれている。
+
 ## 4. 必要な GitHub repository variables 一覧
 
 リポジトリの **Settings → Secrets and variables → Actions → Variables**（repository variables）に以下を設定する。**Secrets ではなく Variables** に置く（いずれも秘密の実値ではなく参照情報・スイッチのため）。秘密の実値（`DATABASE_URL`）は GitHub には置かず、Secret Manager に保管する。
@@ -198,7 +240,14 @@ printf '%s' '<NEON_DATABASE_URL>' | gcloud secrets versions add "<DB_URL_SECRET_
 | `CLOUD_RUN_SERVICE` | Cloud Run サービス名（イメージ名にも流用） | `<SERVICE_NAME>` |
 | `CLOUD_RUN_SERVICE_ACCOUNT` | Cloud Run 実行 SA（`roles/secretmanager.secretAccessor` 必要） | `<RUNTIME_SA_EMAIL>` |
 | `DATABASE_URL_SECRET` | Secret Manager 上のシークレット名 | `<DB_URL_SECRET_NAME>` |
+| `CHATWORK_WEBHOOK_TOKEN_SECRET` | Chatwork Webhook トークンの Secret Manager シークレット名 | `<CHATWORK_WEBHOOK_TOKEN_SECRET_NAME>` |
+| `CHATWORK_API_TOKEN_SECRET` | Chatwork API トークンの Secret Manager シークレット名 | `<CHATWORK_API_TOKEN_SECRET_NAME>` |
+| `SLACK_BOT_TOKEN_SECRET` | Slack Bot トークンの Secret Manager シークレット名 | `<SLACK_BOT_TOKEN_SECRET_NAME>` |
+| `SLACK_DEFAULT_GROUP_CHANNEL_ID` | group 集約フォールバック Slack チャンネル ID（非秘密の設定値） | `<SLACK_DEFAULT_GROUP_CHANNEL_ID>` |
+| `SLACK_DEFAULT_DM_CHANNEL_ID` | direct 集約フォールバック Slack チャンネル ID（非秘密の設定値） | `<SLACK_DEFAULT_DM_CHANNEL_ID>` |
 
+> `*_SECRET` 変数は Secret Manager の**シークレット名**であり実値ではない。トークンの実値は Secret Manager に保管し、アプリが実行時に取得する（`DATABASE_URL` と同じ間接参照）。`SLACK_DEFAULT_*_CHANNEL_ID` は秘密ではないため値そのものを variable に置く。
+>
 > これらの変数名は [`deploy-cloud-run.yml`](../../.github/workflows/deploy-cloud-run.yml) の `vars.*` 参照と完全に一致している必要がある。
 >
 > また、deploy ジョブは `environment: production` を使うため、リポジトリに **`production` environment** を作成しておく（保護ルールや必須レビュアーを付けたい場合はここで設定）。
@@ -226,8 +275,14 @@ deploy 時の `--set-env-vars`（秘密の実値は含めない。参照情報�
 | `GOOGLE_CLOUD_PROJECT` | `<PROJECT_ID>` | Secret Manager 参照先プロジェクト |
 | `DATABASE_URL_SECRET` | `<DB_URL_SECRET_NAME>` | 取得対象のシークレット名 |
 | `DB_POOLED` | `true` | Neon pooled 接続（`prepare:false`） |
+| `CHATWORK_WEBHOOK_TOKEN_SECRET` | `<CHATWORK_WEBHOOK_TOKEN_SECRET_NAME>` | Chatwork Webhook トークンのシークレット名 |
+| `CHATWORK_API_TOKEN_SECRET` | `<CHATWORK_API_TOKEN_SECRET_NAME>` | Chatwork API トークンのシークレット名 |
+| `SLACK_BOT_TOKEN_SECRET` | `<SLACK_BOT_TOKEN_SECRET_NAME>` | Slack Bot トークンのシークレット名 |
+| `SLACK_DEFAULT_GROUP_CHANNEL_ID` | `<SLACK_DEFAULT_GROUP_CHANNEL_ID>` | group 集約フォールバックチャンネル（非秘密の設定値） |
+| `SLACK_DEFAULT_DM_CHANNEL_ID` | `<SLACK_DEFAULT_DM_CHANNEL_ID>` | direct 集約フォールバックチャンネル（非秘密の設定値） |
 
-> **`DATABASE_URL`（秘密の実値）は `--update-secrets` でも `--set-env-vars` でも注入しない。** アプリが起動時に実行 SA の ADC で Secret Manager から取得する設計。
+> **トークンの秘密の実値（`DATABASE_URL` / `CHATWORK_WEBHOOK_TOKEN` / `CHATWORK_API_TOKEN` / `SLACK_BOT_TOKEN`）は `--update-secrets` でも `--set-env-vars` でも注入しない。** `--set-env-vars` に渡すのはシークレット**名**（`*_SECRET`）のみで、アプリが起動時に実行 SA の ADC で Secret Manager から実値を取得する設計。`SLACK_DEFAULT_*_CHANNEL_ID` は秘密ではないため値そのものを渡す。
+> `--set-env-vars` は値にカンマを含み得るため `^@@^`（カスタム区切り）構文を使用している。
 
 ## 6. デプロイ後の運用確認
 
@@ -307,10 +362,10 @@ DB をリストアした場合の流れ:
 
 本ドキュメントの記述は [`deploy-cloud-run.yml`](../../.github/workflows/deploy-cloud-run.yml)（実装の正）と一致している:
 
-- [x] 変数名 7 件（`GCP_WORKLOAD_IDENTITY_PROVIDER` / `GCP_DEPLOY_SERVICE_ACCOUNT` / `GCP_PROJECT_ID` / `ARTIFACT_REGISTRY_REPOSITORY` / `CLOUD_RUN_SERVICE` / `CLOUD_RUN_SERVICE_ACCOUNT` / `DATABASE_URL_SECRET`）が workflow の `vars.*` と一致。
+- [x] 変数名 12 件（`GCP_WORKLOAD_IDENTITY_PROVIDER` / `GCP_DEPLOY_SERVICE_ACCOUNT` / `GCP_PROJECT_ID` / `ARTIFACT_REGISTRY_REPOSITORY` / `CLOUD_RUN_SERVICE` / `CLOUD_RUN_SERVICE_ACCOUNT` / `DATABASE_URL_SECRET` / `CHATWORK_WEBHOOK_TOKEN_SECRET` / `CHATWORK_API_TOKEN_SECRET` / `SLACK_BOT_TOKEN_SECRET` / `SLACK_DEFAULT_GROUP_CHANNEL_ID` / `SLACK_DEFAULT_DM_CHANNEL_ID`）が workflow の `vars.*` と一致。
 - [x] リージョンは `asia-northeast1`（`env.GAR_REGION` / `env.CLOUD_RUN_REGION`）。
 - [x] イメージ URI 形式（`<region>-docker.pkg.dev/<PROJECT_ID>/<AR_REPO>/<SERVICE_NAME>:<SHA>`）が `Compute image metadata` ステップと一致。
-- [x] `--set-env-vars`（`NODE_ENV` / `SECRET_BACKEND=gcp` / `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` / `DB_POOLED=true`）が `Deploy to Cloud Run` ステップと一致。`DATABASE_URL` は注入しない。
+- [x] `--set-env-vars`（`NODE_ENV` / `SECRET_BACKEND=gcp` / `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` / `DB_POOLED=true` / `CHATWORK_WEBHOOK_TOKEN_SECRET` / `CHATWORK_API_TOKEN_SECRET` / `SLACK_BOT_TOKEN_SECRET` / `SLACK_DEFAULT_GROUP_CHANNEL_ID` / `SLACK_DEFAULT_DM_CHANNEL_ID`）が `Deploy to Cloud Run` ステップと一致。トークンの秘密の実値（`DATABASE_URL` / `*_TOKEN`）は注入せず、シークレット名のみを渡す。
 - [x] リソース制限（`--port 8080` / `--min-instances 0` / `--max-instances 3` / `--cpu 1` / `--memory 512Mi`）が一致。
-- [x] 実行 SA（`CLOUD_RUN_SERVICE_ACCOUNT`）への `roles/secretmanager.secretAccessor` を必須として記載。
+- [x] 実行 SA（`CLOUD_RUN_SERVICE_ACCOUNT`）への `roles/secretmanager.secretAccessor` を、`DATABASE_URL` + 3 トークンシークレットの 4 件について必須として記載。
 - [x] `/health` 200 検証・SHA タグ・Trivy スキャン・`::add-mask::` による migration 時のマスクを記載。

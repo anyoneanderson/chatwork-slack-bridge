@@ -24,6 +24,16 @@ export const ConfigSchema = z
       .enum(["true", "false", "1", "0"])
       .default("false")
       .transform((v) => v === "true" || v === "1"),
+    /** Chatwork Webhook 署名検証用トークン（base64）。secret adapter 経由で取得する。 */
+    CHATWORK_WEBHOOK_TOKEN: z.string().min(1),
+    /** Chatwork API（`GET /rooms`）用トークン。secret adapter 経由で取得する。 */
+    CHATWORK_API_TOKEN: z.string().min(1),
+    /** Slack 投稿用 Bot トークン。secret adapter 経由で取得する。 */
+    SLACK_BOT_TOKEN: z.string().min(1),
+    /** group 種別の集約フォールバック Slack チャンネル ID（秘密ではなく設定値）。 */
+    SLACK_DEFAULT_GROUP_CHANNEL_ID: z.string().min(1),
+    /** direct 種別の集約フォールバック Slack チャンネル ID（秘密ではなく設定値）。 */
+    SLACK_DEFAULT_DM_CHANNEL_ID: z.string().min(1),
   })
   .superRefine((config, ctx) => {
     if (config.SECRET_BACKEND !== "gcp") {
@@ -84,6 +94,11 @@ export function loadConfig(secrets: SecretProvider): Config {
     GOOGLE_CLOUD_PROJECT: secrets.get("GOOGLE_CLOUD_PROJECT"),
     DATABASE_URL_SECRET: secrets.get("DATABASE_URL_SECRET"),
     DB_POOLED: secrets.get("DB_POOLED"),
+    CHATWORK_WEBHOOK_TOKEN: secrets.get("CHATWORK_WEBHOOK_TOKEN"),
+    CHATWORK_API_TOKEN: secrets.get("CHATWORK_API_TOKEN"),
+    SLACK_BOT_TOKEN: secrets.get("SLACK_BOT_TOKEN"),
+    SLACK_DEFAULT_GROUP_CHANNEL_ID: secrets.get("SLACK_DEFAULT_GROUP_CHANNEL_ID"),
+    SLACK_DEFAULT_DM_CHANNEL_ID: secrets.get("SLACK_DEFAULT_DM_CHANNEL_ID"),
   });
 
   if (!result.success) {

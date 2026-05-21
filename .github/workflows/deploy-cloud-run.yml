@@ -168,12 +168,20 @@ jobs:
           APP_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
           APP_SERVICE_ACCOUNT: ${{ vars.CLOUD_RUN_SERVICE_ACCOUNT }}
           DATABASE_URL_SECRET: ${{ vars.DATABASE_URL_SECRET }}
+          # トークン系秘密は Secret Manager に保管し、ここでは「シークレット名」のみを渡す。
+          # アプリが SECRET_BACKEND=gcp の gcp factory 経由で実行時に値を取得する (DATABASE_URL と同じ間接参照)。
+          CHATWORK_WEBHOOK_TOKEN_SECRET: ${{ vars.CHATWORK_WEBHOOK_TOKEN_SECRET }}
+          CHATWORK_API_TOKEN_SECRET: ${{ vars.CHATWORK_API_TOKEN_SECRET }}
+          SLACK_BOT_TOKEN_SECRET: ${{ vars.SLACK_BOT_TOKEN_SECRET }}
+          # Slack チャンネル ID は秘密ではない設定値。実値ではなく GitHub variable 経由で渡す。
+          SLACK_DEFAULT_GROUP_CHANNEL_ID: ${{ vars.SLACK_DEFAULT_GROUP_CHANNEL_ID }}
+          SLACK_DEFAULT_DM_CHANNEL_ID: ${{ vars.SLACK_DEFAULT_DM_CHANNEL_ID }}
         run: |
           set -euo pipefail
 
-          # DATABASE_URL は --update-secrets で注入しない。
+          # DATABASE_URL / *_TOKEN (秘密の実値) は --update-secrets で注入しない。
           # アプリが Secret Manager adapter (SECRET_BACKEND=gcp) 経由で実行時に取得する設計。
-          # --set-env-vars には参照情報・スイッチのみを渡す (秘密の実値は含めない)。
+          # --set-env-vars には参照情報 (シークレット名)・スイッチ・非秘密の設定値 (チャンネル ID) のみを渡す。
           gcloud run deploy "${APP_SERVICE}" \
             --image "${{ steps.meta.outputs.image_uri }}" \
             --region "${CLOUD_RUN_REGION}" \
@@ -185,7 +193,7 @@ jobs:
             --max-instances 3 \
             --cpu 1 \
             --memory 512Mi \
-            --set-env-vars "NODE_ENV=production,SECRET_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${APP_PROJECT_ID},DATABASE_URL_SECRET=${DATABASE_URL_SECRET},DB_POOLED=true" \
+            --set-env-vars "^@@^NODE_ENV=production@@SECRET_BACKEND=gcp@@GOOGLE_CLOUD_PROJECT=${APP_PROJECT_ID}@@DATABASE_URL_SECRET=${DATABASE_URL_SECRET}@@DB_POOLED=true@@CHATWORK_WEBHOOK_TOKEN_SECRET=${CHATWORK_WEBHOOK_TOKEN_SECRET}@@CHATWORK_API_TOKEN_SECRET=${CHATWORK_API_TOKEN_SECRET}@@SLACK_BOT_TOKEN_SECRET=${SLACK_BOT_TOKEN_SECRET}@@SLACK_DEFAULT_GROUP_CHANNEL_ID=${SLACK_DEFAULT_GROUP_CHANNEL_ID}@@SLACK_DEFAULT_DM_CHANNEL_ID=${SLACK_DEFAULT_DM_CHANNEL_ID}" \
             --labels "commit-sha=${GITHUB_SHA::12},managed-by=github-actions" \
             --quiet
 

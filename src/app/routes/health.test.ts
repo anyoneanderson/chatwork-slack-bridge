@@ -22,6 +22,12 @@ function createTestDeps(ping: DbClient["ping"]) {
     DB_HEALTH_TIMEOUT_MS: 123,
     SECRET_BACKEND: "env",
     DB_POOLED: false,
+    // forwarding フェーズの必須キー（DUMMY 値 / CON-005）。
+    CHATWORK_WEBHOOK_TOKEN: "dummy-chatwork-webhook-token",
+    CHATWORK_API_TOKEN: "dummy-chatwork-api-token",
+    SLACK_BOT_TOKEN: "xoxb-dummy-slack-bot-token",
+    SLACK_DEFAULT_GROUP_CHANNEL_ID: "C0DUMMYGROUP",
+    SLACK_DEFAULT_DM_CHANNEL_ID: "C0DUMMYDM",
   };
   const db = {
     db: {},
