@@ -39,10 +39,10 @@
 - [x] T014: [REQ-009] CI 雛形（.github/workflows/ci.yml）
 
 ### Phase 3-R: コンテナ・CI レビューゲート [orchestrator]
-- [ ] T014-R: Phase 3 の spec-review + spec-test 実行（compose 起動 / CI workflow 妥当性）
+- [x] T014-R: Phase 3 の spec-review + spec-test 実行（compose 起動 / CI workflow 妥当性）
 
 ### Phase 4: 最終品質ゲート・受け入れ確認・PR [orchestrator]
-- [ ] T015: Final Quality Gate（lint / typecheck / test 一括 + 受け入れ基準確認）
+- [x] T015: Final Quality Gate（lint / typecheck / test 一括 + 受け入れ基準確認）
 - [ ] T016: PR 作成（Issue #1 紐付け）
 
 ## 3. タスク詳細
