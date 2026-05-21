@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 
 import type { AppDeps } from "@/app/server";
+import { serializeError } from "@/serialize-error";
 
 /**
  * /health ルートを生成する。
@@ -22,24 +23,4 @@ export function createHealthRoute(deps: AppDeps): Hono {
   });
 
   return route;
-}
-
-/**
- * health 失敗ログに必要な範囲だけを抽出する。
- *
- * @param err 捕捉したエラー
- * @returns 接続文字列を含めないエラー情報
- */
-function serializeError(err: unknown): { name: string; message: string; op?: string } {
-  if (err instanceof Error) {
-    const serialized = { name: err.name, message: err.message };
-
-    if ("op" in err && typeof err.op === "string") {
-      return { ...serialized, op: err.op };
-    }
-
-    return serialized;
-  }
-
-  return { name: "UnknownError", message: "unknown error" };
 }

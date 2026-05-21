@@ -32,7 +32,7 @@
 - [x] T012: [NFR-002] ユニットテスト（config / health / secret adapter）
 
 ### Phase 2-R: コア基盤 レビューゲート [orchestrator]
-- [ ] T012-R: Phase 2 の spec-review + spec-test 実行（カバレッジ 80% / アダプタ境界遵守 / セキュリティ確認）
+- [x] T012-R: Phase 2 の spec-review + spec-test 実行（カバレッジ 80% / アダプタ境界遵守 / セキュリティ確認）
 
 ### Phase 3: コンテナ・CI [code]
 - [ ] T013: [REQ-007] Dockerfile / docker-compose.yml（app + PostgreSQL）

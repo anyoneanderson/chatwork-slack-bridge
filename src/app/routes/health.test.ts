@@ -57,7 +57,10 @@ describe("GET /health", () => {
   });
 
   it("returns down status when db.ping rejects with connection failure", async () => {
-    const ping = vi.fn<DbClient["ping"]>().mockRejectedValue(new Error("connection failed"));
+    const rawUrl = "postgres://u:p@localhost:5432/db";
+    const ping = vi
+      .fn<DbClient["ping"]>()
+      .mockRejectedValue(new Error(`connection failed for ${rawUrl}`));
     const { deps, errorCalls } = createTestDeps(ping);
     const app = createApp(deps);
 
@@ -66,6 +69,9 @@ describe("GET /health", () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ status: "error", db: "down" });
     expect(errorCalls).toHaveLength(1);
+    expect(JSON.stringify(errorCalls)).not.toContain(rawUrl);
+    expect(JSON.stringify(errorCalls)).not.toContain("u:p@");
+    expect(JSON.stringify(errorCalls)).toContain("[REDACTED_URL]");
     expect(JSON.stringify(errorCalls)).not.toContain(deps.config.DATABASE_URL);
   });
 

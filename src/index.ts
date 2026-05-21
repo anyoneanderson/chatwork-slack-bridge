@@ -5,6 +5,7 @@ import { createApp } from "@/app/server";
 import { ConfigError, loadConfig } from "@/config/env";
 import { createDbClient } from "@/db/client";
 import { createLogger } from "@/logger";
+import { serializeError } from "@/serialize-error";
 
 const bootstrapLogger = createLogger("info");
 const secretProvider = new EnvSecretProvider();
@@ -79,18 +80,4 @@ function formatConfigIssues(
   return Object.entries(issues)
     .filter((entry): entry is [string, string[]] => Array.isArray(entry[1]))
     .map(([field, reasons]) => ({ field, reasons }));
-}
-
-/**
- * 起動・終了処理の例外を安全に構造化する。
- *
- * @param err 捕捉したエラー
- * @returns 秘密値を含めない最小限のエラー情報
- */
-function serializeError(err: unknown): { name: string; message: string } {
-  if (err instanceof Error) {
-    return { name: err.name, message: err.message };
-  }
-
-  return { name: "UnknownError", message: "unknown error" };
 }

@@ -4,6 +4,7 @@ import { createRoutes } from "@/app/routes/index";
 import type { Config } from "@/config/env";
 import type { DbClient } from "@/db/client";
 import type { Logger } from "@/logger";
+import { serializeError } from "@/serialize-error";
 
 export interface AppDeps {
   db: DbClient;
@@ -36,18 +37,4 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   return app;
-}
-
-/**
- * Error を安全に構造化ログへ載せる。
- *
- * @param err 捕捉したエラー
- * @returns 秘密値を含めない最小限のエラー情報
- */
-function serializeError(err: unknown): { name: string; message: string } {
-  if (err instanceof Error) {
-    return { name: err.name, message: err.message };
-  }
-
-  return { name: "UnknownError", message: "unknown error" };
 }
