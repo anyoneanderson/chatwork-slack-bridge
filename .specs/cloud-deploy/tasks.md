@@ -44,7 +44,7 @@ GCP リソース（プロジェクト / WIF / Artifact Registry / Secret / Neon�
 
 ### Phase 4: 最終品質ゲート・受け入れ確認・PR [orchestrator]
 - [x] T012: Final Quality Gate（lint / typecheck / test 一括 + 受け入れ基準確認 + 本番デプロイ実地確認）
-- [ ] T013: PR 作成（Issue #2 紐付け）
+- [x] T013: PR 作成（Issue #2 紐付け）
 
 ## 2.1 優先度・実装順
 
