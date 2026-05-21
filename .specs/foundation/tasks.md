@@ -19,16 +19,16 @@
 - [x] T004: リポジトリ補助ファイル（.gitignore / .env.example / .dockerignore）
 
 ### Phase 1-R: 初期化 レビューゲート [orchestrator]
-- [ ] T004-R: Phase 1 の spec-review + spec-test 実行（設定の妥当性・`pnpm install`/lint/typecheck 確認）
+- [x] T004-R: Phase 1 の spec-review + spec-test 実行（設定の妥当性・`pnpm install`/lint/typecheck 確認）
 
 ### Phase 2: コア基盤実装 [code]
-- [ ] T005: ディレクトリ scaffold（アダプタ境界）
-- [ ] T006: [REQ-006] 構造化ロガー（pino）
-- [ ] T007: [REQ-003] secret adapter（SecretProvider IF + env 実装）
-- [ ] T008: [REQ-003] config/env（Zod 検証 + loadConfig）
-- [ ] T009: [REQ-004] Drizzle DB クライアント・schema・migration 基盤
-- [ ] T010: [REQ-002] Hono アプリ雛形（createApp / error handler / index.ts）
-- [ ] T011: [REQ-001] /health エンドポイント（DB 疎通含む）
+- [x] T005: ディレクトリ scaffold（アダプタ境界）
+- [x] T006: [REQ-006] 構造化ロガー（pino）
+- [x] T007: [REQ-003] secret adapter（SecretProvider IF + env 実装）
+- [x] T008: [REQ-003] config/env（Zod 検証 + loadConfig）
+- [x] T009: [REQ-004] Drizzle DB クライアント・schema・migration 基盤
+- [x] T010: [REQ-002] Hono アプリ雛形（createApp / error handler / index.ts）
+- [x] T011: [REQ-001] /health エンドポイント（DB 疎通含む）
 - [ ] T012: [NFR-002] ユニットテスト（config / health / secret adapter）
 
 ### Phase 2-R: コア基盤 レビューゲート [orchestrator]
