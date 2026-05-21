@@ -25,10 +25,10 @@ GCP リソース（プロジェクト / WIF / Artifact Registry / Secret / Neon�
 - [x] T006: [NFR-004] ユニットテスト（factory / gcp provider モック / db client pooled）
 
 ### Phase 1-R: アプリ対応 レビューゲート [orchestrator]
-- [ ] T006-R: Phase 1 の spec-review + spec-test（アダプタ境界 / 同期 IF 維持 / 秘密非ログ / カバレッジ 80%）
+- [x] T006-R: Phase 1 の spec-review + spec-test（アダプタ境界 / 同期 IF 維持 / 秘密非ログ / カバレッジ 80%）
 
 ### Phase 2: コンテナ本番化 [code]
-- [ ] T007: [REQ-001] 本番 multi-stage Dockerfile（builder/runner / 非 root / コンパイル済み JS）
+- [x] T007: [REQ-001] 本番 multi-stage Dockerfile（builder/runner / 非 root / コンパイル済み JS）
 - [ ] T008: [REQ-001] `.dockerignore` 追補 + ローカル build/run 動作確認（`SECRET_BACKEND=env`）
 
 ### Phase 2-R: コンテナ レビューゲート [orchestrator]
