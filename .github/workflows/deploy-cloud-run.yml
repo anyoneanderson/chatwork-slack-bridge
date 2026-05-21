@@ -59,10 +59,13 @@ jobs:
     environment: production
     needs: quality-gate
     # PR では quality-gate のみで止め、Cloud Run への deploy は main への push
-    # (= マージ時の自動デプロイ) または手動 dispatch のときだけ実行する。
+    # (= マージ時の自動デプロイ) または main に対する手動 dispatch のときだけ実行する。
+    # github.ref を main に固定し、feature ブランチでの workflow_dispatch による
+    # 本番デプロイを防ぐ。
     # 併せて upstream リポジトリ以外 (fork) では実行せず、誤デプロイを防ぐ。
     if: >-
       github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main' &&
       github.repository == 'anyoneanderson/chatwork-slack-bridge'
 
     steps:
@@ -209,6 +212,8 @@ jobs:
 
       - name: Publish deployment summary
         run: |
+          set -euo pipefail
+
           {
             echo "## Cloud Run Deploy"
             echo ""

@@ -2,7 +2,7 @@
 
 Chatwork Slack Bridge を Google Cloud Run へデプロイするための、初回プロビジョニング・継続デプロイ・運用確認・ロールバックの手順をまとめる。
 
-デプロイ自体は GitHub Actions の [`deploy-cloud-run.yml`](../../.github/workflows/deploy-cloud-run.yml) が `main` への push（およびマージ）または手動 `workflow_dispatch` をトリガに自動実行する。本ドキュメントは、その workflow が前提とする GCP / Secret Manager / GitHub 側のリソースを手動で整える手順である。
+デプロイ自体は GitHub Actions の [`deploy-cloud-run.yml`](../../.github/workflows/deploy-cloud-run.yml) が `main` への push（およびマージ）または `main` ブランチに対する手動 `workflow_dispatch` をトリガに自動実行する（feature ブランチでの dispatch は deploy されない）。本ドキュメントは、その workflow が前提とする GCP / Secret Manager / GitHub 側のリソースを手動で整える手順である。
 
 > このリポジトリは OSS 配布を想定している。**実値（プロジェクト ID・SA メール・Neon 接続文字列・クライアント名など）は本ドキュメントにもコード/workflow にも書かない。** 以下はすべて `<PLACEHOLDER>` で記述する。実運用では各自の環境値に読み替えること。
 
@@ -205,10 +205,10 @@ printf '%s' '<NEON_DATABASE_URL>' | gcloud secrets versions add "<DB_URL_SECRET_
 
 ## 5. デプロイの流れ
 
-`main` への push（マージ）または手動 `workflow_dispatch` で [`deploy-cloud-run.yml`](../../.github/workflows/deploy-cloud-run.yml) が起動する。PR では `quality-gate` のみ実行され、deploy は行われない。
+`main` への push（マージ）または **`main` ブランチに対する** 手動 `workflow_dispatch` で [`deploy-cloud-run.yml`](../../.github/workflows/deploy-cloud-run.yml) が起動する。deploy ジョブは `github.ref == 'refs/heads/main'` に固定されているため、feature ブランチを選んで `workflow_dispatch` しても deploy は実行されない（`quality-gate` のみ）。PR でも `quality-gate` のみ実行され、deploy は行われない。
 
 1. **quality-gate**: `pnpm install --frozen-lockfile` → `pnpm lint` → `pnpm typecheck` → `pnpm test --coverage`。
-2. **deploy**（`quality-gate` 成功後、`main` push / dispatch かつ upstream リポジトリのときのみ）:
+2. **deploy**（`quality-gate` 成功後、`github.ref == 'refs/heads/main'`（push / dispatch）かつ upstream リポジトリのときのみ）:
    1. WIF で `<DEPLOY_SA_EMAIL>` を impersonate（`google-github-actions/auth@v2`）。
    2. Secret Manager から `DATABASE_URL` を一時取得し、取得直後に `::add-mask::` でマスクして `pnpm db:migrate`（drizzle-kit migrate は冪等）。
    3. `docker buildx` でイメージを build し、Artifact Registry へ **git SHA タグ**（+ `latest`）で push。
