@@ -1,0 +1,218 @@
+name: deploy-cloud-run
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+# main への push / workflow_dispatch では deploy 単一レーン (cancel しない)。
+# main 向け PR では ref ごとにグループを分け、push 連発で古い run を上書きできるよう
+# cancel-in-progress を有効化する。
+concurrency:
+  group: deploy-cloud-run-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GAR_REGION: asia-northeast1
+  CLOUD_RUN_REGION: asia-northeast1
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test with coverage
+        run: pnpm test --coverage
+
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    needs: quality-gate
+    # PR では quality-gate のみで止め、Cloud Run への deploy は main への push
+    # (= マージ時の自動デプロイ) または手動 dispatch のときだけ実行する。
+    # 併せて upstream リポジトリ以外 (fork) では実行せず、誤デプロイを防ぐ。
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.repository == 'anyoneanderson/chatwork-slack-bridge'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          # WIF を使用し、SA JSON 鍵は発行・保管しない。
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies (for Drizzle migrate)
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations to production DB
+        env:
+          DATABASE_URL_SECRET: ${{ vars.DATABASE_URL_SECRET }}
+        run: |
+          set -euo pipefail
+
+          # 本番 DATABASE_URL を Secret Manager から一時取得して migrate する。
+          # drizzle-kit migrate は冪等 (適用済み migration はスキップ)。
+          # Secret Manager 由来の値は GitHub Actions に自動マスクされないため、
+          # 取得直後に ::add-mask:: で明示的にマスクし、以降ログに露出させない。
+          DATABASE_URL="$(gcloud secrets versions access latest --secret="${DATABASE_URL_SECRET}")"
+          echo "::add-mask::${DATABASE_URL}"
+          export DATABASE_URL
+          pnpm db:migrate
+
+      - name: Configure Artifact Registry auth
+        run: gcloud auth configure-docker "${GAR_REGION}-docker.pkg.dev" --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute image metadata
+        id: meta
+        env:
+          APP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          APP_REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}
+          APP_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+        run: |
+          set -euo pipefail
+
+          short_sha="${GITHUB_SHA::12}"
+          image_repository="${GAR_REGION}-docker.pkg.dev/${APP_PROJECT_ID}/${APP_REPOSITORY}/${APP_SERVICE}"
+          # deploy が参照するのは SHA タグ。latest は可読性のための補助タグ。
+          image_uri="${image_repository}:${short_sha}"
+          latest_uri="${image_repository}:latest"
+
+          {
+            echo "image_uri=${image_uri}"
+            echo "latest_uri=${latest_uri}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_uri }}
+            ${{ steps.meta.outputs.latest_uri }}
+          cache-from: type=gha,scope=deploy-cloud-run
+          cache-to: type=gha,scope=deploy-cloud-run,mode=max
+
+      - name: Scan image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          # build と deploy の間でスキャンし、CRITICAL/HIGH を含むイメージを deploy しない。
+          image-ref: ${{ steps.meta.outputs.image_uri }}
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        env:
+          APP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          APP_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+          APP_SERVICE_ACCOUNT: ${{ vars.CLOUD_RUN_SERVICE_ACCOUNT }}
+          DATABASE_URL_SECRET: ${{ vars.DATABASE_URL_SECRET }}
+        run: |
+          set -euo pipefail
+
+          # DATABASE_URL は --update-secrets で注入しない。
+          # アプリが Secret Manager adapter (SECRET_BACKEND=gcp) 経由で実行時に取得する設計。
+          # --set-env-vars には参照情報・スイッチのみを渡す (秘密の実値は含めない)。
+          gcloud run deploy "${APP_SERVICE}" \
+            --image "${{ steps.meta.outputs.image_uri }}" \
+            --region "${CLOUD_RUN_REGION}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --service-account "${APP_SERVICE_ACCOUNT}" \
+            --port 8080 \
+            --min-instances 0 \
+            --max-instances 3 \
+            --cpu 1 \
+            --memory 512Mi \
+            --set-env-vars "NODE_ENV=production,SECRET_BACKEND=gcp,GOOGLE_CLOUD_PROJECT=${APP_PROJECT_ID},DATABASE_URL_SECRET=${DATABASE_URL_SECRET},DB_POOLED=true" \
+            --labels "commit-sha=${GITHUB_SHA::12},managed-by=github-actions" \
+            --quiet
+
+          service_url="$(gcloud run services describe "${APP_SERVICE}" --region "${CLOUD_RUN_REGION}" --format='value(status.url)')"
+          revision_name="$(gcloud run services describe "${APP_SERVICE}" --region "${CLOUD_RUN_REGION}" --format='value(status.latestReadyRevisionName)')"
+
+          {
+            echo "service_url=${service_url}"
+            echo "revision_name=${revision_name}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Verify /health
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+        run: |
+          set -euo pipefail
+
+          # デプロイ成功判定として /health が 200 (Neon 疎通成功) を返すことを検証する。
+          code="$(curl -fsS -o /dev/null -w '%{http_code}' "${SERVICE_URL}/health")"
+          if [ "${code}" != "200" ]; then
+            echo "::error::/health returned HTTP ${code} (expected 200)"
+            exit 1
+          fi
+
+      - name: Publish deployment summary
+        run: |
+          {
+            echo "## Cloud Run Deploy"
+            echo ""
+            echo "- Service URL: ${{ steps.deploy.outputs.service_url }}"
+            echo "- Revision: ${{ steps.deploy.outputs.revision_name }}"
+            echo "- Image: ${{ steps.meta.outputs.image_uri }}"
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -32,7 +32,7 @@ GCP リソース（プロジェクト / WIF / Artifact Registry / Secret / Neon�
 - [x] T008: [REQ-001] `.dockerignore` 追補 + ローカル build/run 動作確認（`SECRET_BACKEND=env`）
 
 ### Phase 2-R: コンテナ レビューゲート [orchestrator]
-- [ ] T008-R: Phase 2 の spec-review + spec-test（タグ固定 / 非 root / 秘密非焼き込み / `dist` 実行確認）
+- [x] T008-R: Phase 2 の spec-review + spec-test（タグ固定 / 非 root / 秘密非焼き込み / `dist` 実行確認）
 
 ### Phase 3: デプロイ workflow・ドキュメント [code]
 - [ ] T009: [REQ-004] `.github/workflows/deploy-cloud-run.yml`（WIF / quality-gate / migrate / build+push / deploy / `/health` 検証 / repo ガード）
