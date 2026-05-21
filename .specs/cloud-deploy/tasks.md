@@ -35,7 +35,7 @@ GCP リソース（プロジェクト / WIF / Artifact Registry / Secret / Neon�
 - [x] T008-R: Phase 2 の spec-review + spec-test（タグ固定 / 非 root / 秘密非焼き込み / `dist` 実行確認）
 
 ### Phase 3: デプロイ workflow・ドキュメント [code]
-- [ ] T009: [REQ-004] `.github/workflows/deploy-cloud-run.yml`（WIF / quality-gate / migrate / build+push / deploy / `/health` 検証 / repo ガード）
+- [x] T009: [REQ-004] `.github/workflows/deploy-cloud-run.yml`（WIF / quality-gate / migrate / build+push / deploy / `/health` 検証 / repo ガード）
 - [ ] T010: [REQ-005] `docs/deploy/cloud-run.md`（GCP リソース / WIF / Secret / variables 一覧 / ロールバック）
 - [ ] T011: [REQ-005] `docs/deploy/docker.md`（Docker 単体 / VPS 手順）
 
