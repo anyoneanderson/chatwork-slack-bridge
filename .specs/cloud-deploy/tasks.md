@@ -29,7 +29,7 @@ GCP リソース（プロジェクト / WIF / Artifact Registry / Secret / Neon�
 
 ### Phase 2: コンテナ本番化 [code]
 - [x] T007: [REQ-001] 本番 multi-stage Dockerfile（builder/runner / 非 root / コンパイル済み JS）
-- [ ] T008: [REQ-001] `.dockerignore` 追補 + ローカル build/run 動作確認（`SECRET_BACKEND=env`）
+- [x] T008: [REQ-001] `.dockerignore` 追補 + ローカル build/run 動作確認（`SECRET_BACKEND=env`）
 
 ### Phase 2-R: コンテナ レビューゲート [orchestrator]
 - [ ] T008-R: Phase 2 の spec-review + spec-test（タグ固定 / 非 root / 秘密非焼き込み / `dist` 実行確認）
