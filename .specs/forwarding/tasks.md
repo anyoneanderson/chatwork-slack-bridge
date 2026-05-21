@@ -41,14 +41,14 @@ Slack App / Chatwork webhook・API トークンは手動プロビジョニング
 - [x] T009-R: Phase 3 の spec-review + spec-test（slack アダプタ境界遵守 / ボタン非表示 / トークン非ログ）
 
 ### Phase 4: サービス・ルート結線 [code]
-- [ ] T010: [REQ-007] `app/services/resolve-target.ts`（ルーティング判定 / discriminated union / `never` 網羅）+ 全分岐テスト
-- [ ] T011: [REQ-005/006/008] `app/services/forward-message.ts`（**ルーム解決(find/getRoom upsert)→ `my` は保存前 skip → `onConflictDoNothing` returning で保存（FK 親確保済み）→ resolveTarget → Slack 投稿 → ts UPDATE / 整合性方針**）+ 重複チェック・FK 順序・my skip テスト
-- [ ] T012: [REQ-001] `app/routes/chatwork-webhook.ts`（raw body / 署名検証 / **`JSON.parse` を try/catch で捕捉** / safeParse / イベント判定 / service 呼び出し）+ `routes/index.ts` マウント + ルートテスト（署名失敗 401 / 壊れ JSON 200 / 対象外 200）
-- [ ] T013: [REQ-001] `src/index.ts` 起動シーケンス拡張（chatwork/slack client 生成して `createApp` に注入）
-- [ ] T013b: [docs] `chatwork-slack-bridge-overview.md` 更新（`chatwork_rooms.slack_channel_id` を nullable 化 + `room_type` 追加 / `POST /chatwork/webhook` 実装反映 / 新 env・Secrets（`CHATWORK_WEBHOOK_TOKEN`/`CHATWORK_API_TOKEN`/`SLACK_BOT_TOKEN`/`SLACK_DEFAULT_*_CHANNEL_ID`）追記 / 表示例からアクションボタン削除）※review_rules で overview 更新漏れは重大扱い
+- [x] T010: [REQ-007] `app/services/resolve-target.ts`（ルーティング判定 / discriminated union / `never` 網羅）+ 全分岐テスト
+- [x] T011: [REQ-005/006/008] `app/services/forward-message.ts`（**ルーム解決(find/getRoom upsert)→ `my` は保存前 skip → `onConflictDoNothing` returning で保存（FK 親確保済み）→ resolveTarget → Slack 投稿 → ts UPDATE / 整合性方針**）+ 重複チェック・FK 順序・my skip テスト
+- [x] T012: [REQ-001] `app/routes/chatwork-webhook.ts`（raw body / 署名検証 / **`JSON.parse` を try/catch で捕捉** / safeParse / イベント判定 / service 呼び出し）+ `routes/index.ts` マウント + ルートテスト（署名失敗 401 / 壊れ JSON 200 / 対象外 200）
+- [x] T013: [REQ-001] `src/index.ts` 起動シーケンス拡張（chatwork/slack client 生成して `createApp` に注入）
+- [x] T013b: [docs] `chatwork-slack-bridge-overview.md` 更新（`chatwork_rooms.slack_channel_id` を nullable 化 + `room_type` 追加 / `POST /chatwork/webhook` 実装反映 / 新 env・Secrets（`CHATWORK_WEBHOOK_TOKEN`/`CHATWORK_API_TOKEN`/`SLACK_BOT_TOKEN`/`SLACK_DEFAULT_*_CHANNEL_ID`）追記 / 表示例からアクションボタン削除）※review_rules で overview 更新漏れは重大扱い
 
 ### Phase 4-R: サービス・ルート レビューゲート [orchestrator]
-- [ ] T013-R: Phase 4 の spec-review + spec-test（冪等性 / FK 順序・my 保存前 skip / 整合性方針 / アダプタ境界 / 公開エンドポイント最小 / ルーティング網羅 / **overview 更新漏れ確認** / カバレッジ 80%）
+- [x] T013-R: Phase 4 の spec-review + spec-test（冪等性 / FK 順序・my 保存前 skip / 整合性方針 / アダプタ境界 / 公開エンドポイント最小 / ルーティング網羅 / **overview 更新漏れ確認** / カバレッジ 80%）
 
 ### Phase 5: 最終品質ゲート・受け入れ確認・PR [orchestrator]
 - [ ] T014: Final Quality Gate（`pnpm lint` / `pnpm typecheck` / `pnpm test` 一括 + 受け入れ基準確認 + **overview 更新の反映確認** + 受け入れ確認（実 Slack API 手動確認 と モック/fake adapter 確認を分離。CON-005））

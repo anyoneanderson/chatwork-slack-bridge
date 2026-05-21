@@ -84,15 +84,16 @@ OSS本体は以下で動く構成にする。
 4. Slack の専用チャンネルに投稿する。
 5. Slack の `channel_id`、`ts`、`thread_ts` を PostgreSQL に保存する。
 
-Slack 表示例。
+Slack 表示例（forwarding フェーズは本文＋メタの text 投稿のみ。アクションボタンは後続フェーズ）。
 
 ```text
 [Chatwork] 株式会社Example / 案件A
 田中さん:
 明日のMTGですが、15時に変更可能でしょうか？
-
-Actions: [返信案を作る] [Chatworkで開く] [対応済みにする]
 ```
+
+> アクションボタン（`[返信案を作る] [Chatworkで開く] [対応済みにする]` 等）は slack-reply / ops-safety
+> 以降で追加する。forwarding フェーズの投稿はトップレベルの text のみで、`slack_thread_ts` は null。
 
 ### 2. Slack から Chatwork に返信
 
@@ -151,13 +152,20 @@ create table chatwork_rooms (
   id bigint generated always as identity primary key,
   chatwork_room_id text not null unique,
   room_name text not null,
-  slack_channel_id text not null,
+  room_type text not null check (room_type in ('group','direct','my')),  -- ルーティング判定に使用
+  slack_channel_id text,                 -- nullable: null は種別集約フォールバック（未紐付け）
   enabled boolean not null default true,
   default_reply_mode text not null default 'confirm',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 ```
+
+> forwarding フェーズで `room_type`（`group` / `direct` / `my`）列を追加し、`slack_channel_id` を
+> nullable にした。`slack_channel_id` が null のルームは種別集約チャンネル
+> （`SLACK_DEFAULT_GROUP_CHANNEL_ID` / `SLACK_DEFAULT_DM_CHANNEL_ID`）へフォールバックする。
+> 専用チャンネルを設定すると（`slack_channel_id` を埋めると）そのチャンネルへ切り替わる。
+> `room_type = my`（マイチャット）は転送対象外（保存も投稿もしない）。
 
 ### `chatwork_messages`
 
@@ -255,15 +263,23 @@ create table ai_drafts (
 
 ### `POST /chatwork/webhook`
 
-Chatwork Webhook を受ける。
+Chatwork Webhook を受ける（forwarding フェーズで実装済み）。公開エンドポイントだが認可は署名検証で担保する。
 
-主な処理。
+主な処理（実装済みの順序）。
 
-- 署名検証
-- イベント種別確認
-- 重複チェック
-- PostgreSQL 保存
-- Slack 投稿
+1. **raw body 取得**: 署名検証はパース前のバイト列に対して行うため、`arrayBuffer()` で raw body を先に取得する。
+2. **署名検証**: `X-ChatWorkWebhookSignature` を HMAC-SHA256（timing-safe）で検証する。失敗・欠落は `401`。
+3. **JSON パース / バリデーション**: `JSON.parse` を try/catch で捕捉し、壊れた JSON や Zod 検証失敗は
+   再送ストーム回避のため `200`（no-op）。`message_created` 以外のイベントも `200`（no-op）。
+4. **ルーム解決**: `chatwork_rooms` を `room_id` で検索し、初見なら Chatwork API（`GET /rooms/{id}`）で
+   名前・種別を取得して `enabled=true` / `slack_channel_id=null` でキャッシュする（payload に種別が無いため）。
+   初見ルームの取得に失敗した場合は保存せず `200`（FK を満たせないため。Chatwork の再送に委ねる）。
+   `room_type = my` は保存も投稿もせず `200`。
+5. **重複チェック / 保存**: `unique (chatwork_room_id, chatwork_message_id)` ＋ `onConflictDoNothing` で
+   再送を弾き、新規のみ `chatwork_messages` に保存する（冪等）。
+6. **ルーティング転送**: マトリックス（紐付け済み → 専用チャンネル / 未紐付け → 種別集約 / `enabled=false`
+   → 保存のみ）に従い Slack へ投稿し、`slack_channel_id` / `slack_ts` を保存する。投稿失敗時は保存を
+   維持し（`slack_ts` は null）、ログに記録する（リトライは後続フェーズ）。
 
 ### `POST /slack/events`
 
@@ -577,11 +593,12 @@ GitHub Actions の workflow は公開してよい。
 公開しないもの。
 
 - `CHATWORK_API_TOKEN`
+- `CHATWORK_WEBHOOK_TOKEN`
 - `SLACK_BOT_TOKEN`
 - `SLACK_SIGNING_SECRET`
 - `DATABASE_URL`
 - `GCP_SERVICE_ACCOUNT_KEY`
-- 実際のSlackチャンネルID
+- 実際のSlackチャンネルID（`SLACK_DEFAULT_GROUP_CHANNEL_ID` / `SLACK_DEFAULT_DM_CHANNEL_ID` の実値含む）
 - 実際のChatworkルームID
 - クライアント名や本文を含むログ・fixture
 
@@ -590,9 +607,12 @@ GitHub Actions では、秘密情報を workflow に直接書かず、GitHub Sec
 想定するSecrets。
 
 ```text
+CHATWORK_WEBHOOK_TOKEN
 CHATWORK_API_TOKEN
 SLACK_BOT_TOKEN
 SLACK_SIGNING_SECRET
+SLACK_DEFAULT_GROUP_CHANNEL_ID
+SLACK_DEFAULT_DM_CHANNEL_ID
 DATABASE_URL
 GCP_PROJECT_ID
 GCP_REGION
@@ -600,6 +620,15 @@ GCP_SERVICE_NAME
 GCP_WORKLOAD_IDENTITY_PROVIDER
 GCP_SERVICE_ACCOUNT
 ```
+
+forwarding フェーズで追加した env / Secrets（secret adapter 経由で注入。ローカル/Docker は `.env`、
+Google Cloud は Secret Manager）。
+
+- `CHATWORK_WEBHOOK_TOKEN`: Webhook 署名検証用トークン（base64）。
+- `CHATWORK_API_TOKEN`: ルームメタ取得（`GET /rooms/{id}`）用トークン。
+- `SLACK_BOT_TOKEN`: Slack 投稿（`chat.postMessage`）用 Bot トークン（`chat:write` スコープ）。
+- `SLACK_DEFAULT_GROUP_CHANNEL_ID`: `group` 種別の集約フォールバックチャンネル（秘密ではなく設定値）。
+- `SLACK_DEFAULT_DM_CHANNEL_ID`: `direct` 種別の集約フォールバックチャンネル（秘密ではなく設定値）。
 
 workflow にはSecret名だけを書く。
 

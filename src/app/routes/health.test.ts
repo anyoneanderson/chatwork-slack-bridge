@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { ChatworkClient } from "@/adapters/chatwork/client";
+import type { SlackClient } from "@/adapters/slack/client";
 import { createApp } from "@/app/server";
 import type { Config } from "@/config/env";
 import type { DbClient } from "@/db/client";
@@ -42,9 +44,16 @@ function createTestDeps(ping: DbClient["ping"]) {
       warnCalls.push({ payload, message });
     },
   } as unknown as Logger;
+  // /health は外部 client を使わないが、AppDeps を満たすためのスタブ（呼ばれない）。
+  const chatworkClient: ChatworkClient = {
+    getRoom: vi.fn<ChatworkClient["getRoom"]>(),
+  };
+  const slackClient: SlackClient = {
+    postMessage: vi.fn<SlackClient["postMessage"]>(),
+  };
 
   return {
-    deps: { db, config, logger },
+    deps: { db, config, logger, chatworkClient, slackClient },
     errorCalls,
     warnCalls,
   };
