@@ -30,6 +30,13 @@ ENV NODE_ENV=production
 # 非秘密のデフォルト。EXPOSE 8080 と既定挙動を一致させる（Cloud Run は実行時に PORT を上書き注入）。
 ENV PORT=8080
 
+# ベースイメージの OS セキュリティ更新（libgnutls30 等の fixable な CRITICAL/HIGH を解消）と、
+# 実行時に使わないグローバル npm/npx の削除（同梱 npm の picomatch CVE 除去・攻撃面縮小）。
+# 実行は `node dist/...` のみで npm は不要。
+RUN apt-get update && apt-get upgrade -y \
+  && rm -rf /var/lib/apt/lists/* \
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --from=builder --chown=node:node /app/package.json ./package.json
