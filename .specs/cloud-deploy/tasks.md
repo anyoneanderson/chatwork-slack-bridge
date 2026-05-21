@@ -17,34 +17,34 @@ GCP リソース（プロジェクト / WIF / Artifact Registry / Secret / Neon�
 ## 2. タスク一覧
 
 ### Phase 1: アプリ側のクラウド対応 [code]
-- [ ] T001: [REQ-002] 設定キー拡張（`SECRET_BACKEND` / `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` / `DB_POOLED`）+ Zod refine
-- [ ] T002: [REQ-002] GCP Secret Manager provider（`@google-cloud/secret-manager` 依存追加 + プリフェッチ実装）
-- [ ] T003: [REQ-002] secret provider factory（`SECRET_BACKEND` で env/gcp 切替）
-- [ ] T004: [REQ-003] DB クライアントの pooled 対応（`prepare:false` オプション）
-- [ ] T005: [REQ-006] `src/index.ts` の async bootstrap 化（factory await / 失敗時 exit / shutdown 維持）
-- [ ] T006: [NFR-004] ユニットテスト（factory / gcp provider モック / db client pooled）
+- [x] T001: [REQ-002] 設定キー拡張（`SECRET_BACKEND` / `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` / `DB_POOLED`）+ Zod refine
+- [x] T002: [REQ-002] GCP Secret Manager provider（`@google-cloud/secret-manager` 依存追加 + プリフェッチ実装）
+- [x] T003: [REQ-002] secret provider factory（`SECRET_BACKEND` で env/gcp 切替）
+- [x] T004: [REQ-003] DB クライアントの pooled 対応（`prepare:false` オプション）
+- [x] T005: [REQ-006] `src/index.ts` の async bootstrap 化（factory await / 失敗時 exit / shutdown 維持）
+- [x] T006: [NFR-004] ユニットテスト（factory / gcp provider モック / db client pooled）
 
 ### Phase 1-R: アプリ対応 レビューゲート [orchestrator]
-- [ ] T006-R: Phase 1 の spec-review + spec-test（アダプタ境界 / 同期 IF 維持 / 秘密非ログ / カバレッジ 80%）
+- [x] T006-R: Phase 1 の spec-review + spec-test（アダプタ境界 / 同期 IF 維持 / 秘密非ログ / カバレッジ 80%）
 
 ### Phase 2: コンテナ本番化 [code]
-- [ ] T007: [REQ-001] 本番 multi-stage Dockerfile（builder/runner / 非 root / コンパイル済み JS）
-- [ ] T008: [REQ-001] `.dockerignore` 追補 + ローカル build/run 動作確認（`SECRET_BACKEND=env`）
+- [x] T007: [REQ-001] 本番 multi-stage Dockerfile（builder/runner / 非 root / コンパイル済み JS）
+- [x] T008: [REQ-001] `.dockerignore` 追補 + ローカル build/run 動作確認（`SECRET_BACKEND=env`）
 
 ### Phase 2-R: コンテナ レビューゲート [orchestrator]
-- [ ] T008-R: Phase 2 の spec-review + spec-test（タグ固定 / 非 root / 秘密非焼き込み / `dist` 実行確認）
+- [x] T008-R: Phase 2 の spec-review + spec-test（タグ固定 / 非 root / 秘密非焼き込み / `dist` 実行確認）
 
 ### Phase 3: デプロイ workflow・ドキュメント [code]
-- [ ] T009: [REQ-004] `.github/workflows/deploy-cloud-run.yml`（WIF / quality-gate / migrate / build+push / deploy / `/health` 検証 / repo ガード）
-- [ ] T010: [REQ-005] `docs/deploy/cloud-run.md`（GCP リソース / WIF / Secret / variables 一覧 / ロールバック）
-- [ ] T011: [REQ-005] `docs/deploy/docker.md`（Docker 単体 / VPS 手順）
+- [x] T009: [REQ-004] `.github/workflows/deploy-cloud-run.yml`（WIF / quality-gate / migrate / build+push / deploy / `/health` 検証 / repo ガード）
+- [x] T010: [REQ-005] `docs/deploy/cloud-run.md`（GCP リソース / WIF / Secret / variables 一覧 / ロールバック）
+- [x] T011: [REQ-005] `docs/deploy/docker.md`（Docker 単体 / VPS 手順）
 
 ### Phase 3-R: workflow・docs レビューゲート [orchestrator]
-- [ ] T011-R: Phase 3 の spec-review（actionlint / 秘密非直書き / 実値非記載 / ガード有効）
+- [x] T011-R: Phase 3 の spec-review（actionlint / 秘密非直書き / 実値非記載 / ガード有効）
 
 ### Phase 4: 最終品質ゲート・受け入れ確認・PR [orchestrator]
-- [ ] T012: Final Quality Gate（lint / typecheck / test 一括 + 受け入れ基準確認 + 本番デプロイ実地確認）
-- [ ] T013: PR 作成（Issue #2 紐付け）
+- [x] T012: Final Quality Gate（lint / typecheck / test 一括 + 受け入れ基準確認 + 本番デプロイ実地確認）
+- [x] T013: PR 作成（Issue #2 紐付け）
 
 ## 2.1 優先度・実装順
 

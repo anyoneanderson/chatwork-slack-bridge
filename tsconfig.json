@@ -23,6 +23,9 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true
   },
+  "tsc-alias": {
+    "resolveFullPaths": true
+  },
   "include": ["src/**/*.ts", "*.config.ts"],
   "exclude": ["node_modules", "dist", "coverage"]
 }
