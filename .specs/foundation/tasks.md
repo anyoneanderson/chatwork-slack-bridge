@@ -35,8 +35,8 @@
 - [x] T012-R: Phase 2 の spec-review + spec-test 実行（カバレッジ 80% / アダプタ境界遵守 / セキュリティ確認）
 
 ### Phase 3: コンテナ・CI [code]
-- [ ] T013: [REQ-007] Dockerfile / docker-compose.yml（app + PostgreSQL）
-- [ ] T014: [REQ-009] CI 雛形（.github/workflows/ci.yml）
+- [x] T013: [REQ-007] Dockerfile / docker-compose.yml（app + PostgreSQL）
+- [x] T014: [REQ-009] CI 雛形（.github/workflows/ci.yml）
 
 ### Phase 3-R: コンテナ・CI レビューゲート [orchestrator]
 - [ ] T014-R: Phase 3 の spec-review + spec-test 実行（compose 起動 / CI workflow 妥当性）
