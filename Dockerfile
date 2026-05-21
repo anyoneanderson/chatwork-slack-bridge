@@ -27,6 +27,8 @@ FROM node:22-slim AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
+# 非秘密のデフォルト。EXPOSE 8080 と既定挙動を一致させる（Cloud Run は実行時に PORT を上書き注入）。
+ENV PORT=8080
 
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/dist ./dist
