@@ -17,10 +17,10 @@ GCP リソース（プロジェクト / WIF / Artifact Registry / Secret / Neon�
 ## 2. タスク一覧
 
 ### Phase 1: アプリ側のクラウド対応 [code]
-- [ ] T001: [REQ-002] 設定キー拡張（`SECRET_BACKEND` / `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` / `DB_POOLED`）+ Zod refine
-- [ ] T002: [REQ-002] GCP Secret Manager provider（`@google-cloud/secret-manager` 依存追加 + プリフェッチ実装）
+- [x] T001: [REQ-002] 設定キー拡張（`SECRET_BACKEND` / `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` / `DB_POOLED`）+ Zod refine
+- [x] T002: [REQ-002] GCP Secret Manager provider（`@google-cloud/secret-manager` 依存追加 + プリフェッチ実装）
 - [ ] T003: [REQ-002] secret provider factory（`SECRET_BACKEND` で env/gcp 切替）
-- [ ] T004: [REQ-003] DB クライアントの pooled 対応（`prepare:false` オプション）
+- [x] T004: [REQ-003] DB クライアントの pooled 対応（`prepare:false` オプション）
 - [ ] T005: [REQ-006] `src/index.ts` の async bootstrap 化（factory await / 失敗時 exit / shutdown 維持）
 - [ ] T006: [NFR-004] ユニットテスト（factory / gcp provider モック / db client pooled）
 
