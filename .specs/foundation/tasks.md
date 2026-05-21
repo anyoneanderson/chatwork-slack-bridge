@@ -29,7 +29,7 @@
 - [x] T009: [REQ-004] Drizzle DB クライアント・schema・migration 基盤
 - [x] T010: [REQ-002] Hono アプリ雛形（createApp / error handler / index.ts）
 - [x] T011: [REQ-001] /health エンドポイント（DB 疎通含む）
-- [ ] T012: [NFR-002] ユニットテスト（config / health / secret adapter）
+- [x] T012: [NFR-002] ユニットテスト（config / health / secret adapter）
 
 ### Phase 2-R: コア基盤 レビューゲート [orchestrator]
 - [ ] T012-R: Phase 2 の spec-review + spec-test 実行（カバレッジ 80% / アダプタ境界遵守 / セキュリティ確認）
