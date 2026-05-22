@@ -1,7 +1,9 @@
 import { serve } from "@hono/node-server";
 
+import { createChatworkClient } from "@/adapters/chatwork/client";
 import { createSecretProvider } from "@/adapters/secrets/factory";
 import type { SecretProvider } from "@/adapters/secrets/types";
+import { createSlackClient } from "@/adapters/slack/client";
 import { createApp } from "@/app/server";
 import { type Config, ConfigError, loadConfig } from "@/config/env";
 import { createDbClient } from "@/db/client";
@@ -47,7 +49,10 @@ async function main(): Promise<void> {
 
   const logger = createLogger(config.LOG_LEVEL);
   const db = createDbClient(config.DATABASE_URL, { pooled: config.DB_POOLED });
-  const app = createApp({ db, config, logger });
+  // 外部サービス client はアダプタ経由で生成し、トークンは secret adapter 由来の config から注入する。
+  const chatworkClient = createChatworkClient({ apiToken: config.CHATWORK_API_TOKEN });
+  const slackClient = createSlackClient({ botToken: config.SLACK_BOT_TOKEN });
+  const app = createApp({ db, config, logger, chatworkClient, slackClient });
 
   const server = serve(
     {

@@ -17,42 +17,42 @@ Slack App / Chatwork webhook・API トークンは手動プロビジョニング
 ## 2. タスク一覧
 
 ### Phase 1: スキーマ・secret/config 基盤 [code]
-- [ ] T001: [REQ-004] `db/schema.ts` に `chatwork_rooms` / `chatwork_messages` を定義（identity PK / timestamptz / room_type・status の CHECK / FK index / unique 制約）
-- [ ] T002: [REQ-004] `pnpm db:generate` で migration 生成・`pnpm db:migrate` で適用確認（compose 上）
-- [ ] T003: [REQ-009] secret/config 拡張（`SECRET_KEYS` union + `ConfigSchema` に `CHATWORK_WEBHOOK_TOKEN`/`CHATWORK_API_TOKEN`/`SLACK_BOT_TOKEN`/`SLACK_DEFAULT_GROUP_CHANNEL_ID`/`SLACK_DEFAULT_DM_CHANNEL_ID` 追加、`.env.example` 追記、factory の gcp prefetch 拡張）
+- [x] T001: [REQ-004] `db/schema.ts` に `chatwork_rooms` / `chatwork_messages` を定義（identity PK / timestamptz / room_type・status の CHECK / FK index / unique 制約）
+- [x] T002: [REQ-004] `pnpm db:generate` で migration 生成・`pnpm db:migrate` で適用確認（compose 上）
+- [x] T003: [REQ-009] secret/config 拡張（`SECRET_KEYS` union + `ConfigSchema` に `CHATWORK_WEBHOOK_TOKEN`/`CHATWORK_API_TOKEN`/`SLACK_BOT_TOKEN`/`SLACK_DEFAULT_GROUP_CHANNEL_ID`/`SLACK_DEFAULT_DM_CHANNEL_ID` 追加、`.env.example` 追記、factory の gcp prefetch 拡張、**logger redact に新トークン追加**、**Cloud Run deploy workflow（`.github/workflows/deploy-cloud-run.yml`）と deploy docs（`docs/deploy/{cloud-run,docker}.md`）に新 env/Secret を反映** — 必須化により本番起動が壊れないようにする。※Phase 1-R 二次レビュー（Codex）で検出した重大ギャップ）
 
 ### Phase 1-R: 基盤 レビューゲート [orchestrator]
-- [ ] T003-R: Phase 1 の spec-review + spec-test（スキーマが coding-rules `[MUST]` 準拠 / 既存 secret IF 非破壊 / 秘密非ログ / migration 適用確認）
+- [x] T003-R: Phase 1 の spec-review + spec-test（スキーマが coding-rules `[MUST]` 準拠 / 既存 secret IF 非破壊 / 秘密非ログ / migration 適用確認 / **必須化した新 config が deploy workflow・deploy docs に反映され本番起動が壊れない**）
 
 ### Phase 2: chatwork adapter（署名検証 / payload / client）[code]
-- [ ] T004: [REQ-002] `adapters/chatwork/verify-signature.ts`（HMAC-SHA256 / base64 / `timingSafeEqual` / 長さ事前チェック）
-- [ ] T005: [REQ-003] `adapters/chatwork/webhook-schema.ts`（Zod payload / `message_created` 判定）+ `types.ts`（branded type / `ROOM_TYPES`）
-- [ ] T006: [REQ-006] `adapters/chatwork/client.ts`（`getRoom` = `GET /rooms/{id}` 薄い client / `X-ChatWorkToken` / エラー型）
-- [ ] T007: [NFR-002] 署名検証ユニットテスト（正当 / 改竄 / ヘッダ欠落 / base64 不正 / 長さ不一致）+ schema テスト
+- [x] T004: [REQ-002] `adapters/chatwork/verify-signature.ts`（HMAC-SHA256 / base64 / `timingSafeEqual` / 長さ事前チェック）
+- [x] T005: [REQ-003] `adapters/chatwork/webhook-schema.ts`（Zod payload / `message_created` 判定）+ `types.ts`（branded type / `ROOM_TYPES`）
+- [x] T006: [REQ-006] `adapters/chatwork/client.ts`（`getRoom` = `GET /rooms/{id}` 薄い client / `X-ChatWorkToken` / エラー型）
+- [x] T007: [NFR-002] 署名検証ユニットテスト（正当 / 改竄 / ヘッダ欠落 / base64 不正 / 長さ不一致）+ schema テスト
 
 ### Phase 2-R: chatwork adapter レビューゲート [orchestrator]
-- [ ] T007-R: Phase 2 の spec-review + spec-test（署名検証が raw body 対象 / timing-safe / safeParse / トークン非ログ / 署名テスト網羅）
+- [x] T007-R: Phase 2 の spec-review + spec-test（署名検証が raw body 対象 / timing-safe / safeParse / トークン非ログ / 署名テスト網羅）
 
 ### Phase 3: slack adapter（整形 / 投稿）[code]
-- [ ] T008: [REQ-008] `@slack/web-api` 依存追加 + `adapters/slack/client.ts`（`postMessage` → `{ ts }` / `SlackApiError`）+ `types.ts`
-- [ ] T009: [REQ-008] `adapters/slack/format.ts`（ルーム名・送信者・本文の整形。アクションボタンは含めない）+ 整形ユニットテスト
+- [x] T008: [REQ-008] `@slack/web-api` 依存追加 + `adapters/slack/client.ts`（`postMessage` → `{ ts }` / `SlackApiError`）+ `types.ts`
+- [x] T009: [REQ-008] `adapters/slack/format.ts`（ルーム名・送信者・本文の整形。アクションボタンは含めない）+ 整形ユニットテスト
 
 ### Phase 3-R: slack adapter レビューゲート [orchestrator]
-- [ ] T009-R: Phase 3 の spec-review + spec-test（slack アダプタ境界遵守 / ボタン非表示 / トークン非ログ）
+- [x] T009-R: Phase 3 の spec-review + spec-test（slack アダプタ境界遵守 / ボタン非表示 / トークン非ログ）
 
 ### Phase 4: サービス・ルート結線 [code]
-- [ ] T010: [REQ-007] `app/services/resolve-target.ts`（ルーティング判定 / discriminated union / `never` 網羅）+ 全分岐テスト
-- [ ] T011: [REQ-005/006/008] `app/services/forward-message.ts`（**ルーム解決(find/getRoom upsert)→ `my` は保存前 skip → `onConflictDoNothing` returning で保存（FK 親確保済み）→ resolveTarget → Slack 投稿 → ts UPDATE / 整合性方針**）+ 重複チェック・FK 順序・my skip テスト
-- [ ] T012: [REQ-001] `app/routes/chatwork-webhook.ts`（raw body / 署名検証 / **`JSON.parse` を try/catch で捕捉** / safeParse / イベント判定 / service 呼び出し）+ `routes/index.ts` マウント + ルートテスト（署名失敗 401 / 壊れ JSON 200 / 対象外 200）
-- [ ] T013: [REQ-001] `src/index.ts` 起動シーケンス拡張（chatwork/slack client 生成して `createApp` に注入）
-- [ ] T013b: [docs] `chatwork-slack-bridge-overview.md` 更新（`chatwork_rooms.slack_channel_id` を nullable 化 + `room_type` 追加 / `POST /chatwork/webhook` 実装反映 / 新 env・Secrets（`CHATWORK_WEBHOOK_TOKEN`/`CHATWORK_API_TOKEN`/`SLACK_BOT_TOKEN`/`SLACK_DEFAULT_*_CHANNEL_ID`）追記 / 表示例からアクションボタン削除）※review_rules で overview 更新漏れは重大扱い
+- [x] T010: [REQ-007] `app/services/resolve-target.ts`（ルーティング判定 / discriminated union / `never` 網羅）+ 全分岐テスト
+- [x] T011: [REQ-005/006/008] `app/services/forward-message.ts`（**ルーム解決(find/getRoom upsert)→ `my` は保存前 skip → `onConflictDoNothing` returning で保存（FK 親確保済み）→ resolveTarget → Slack 投稿 → ts UPDATE / 整合性方針**）+ 重複チェック・FK 順序・my skip テスト
+- [x] T012: [REQ-001] `app/routes/chatwork-webhook.ts`（raw body / 署名検証 / **`JSON.parse` を try/catch で捕捉** / safeParse / イベント判定 / service 呼び出し）+ `routes/index.ts` マウント + ルートテスト（署名失敗 401 / 壊れ JSON 200 / 対象外 200）
+- [x] T013: [REQ-001] `src/index.ts` 起動シーケンス拡張（chatwork/slack client 生成して `createApp` に注入）
+- [x] T013b: [docs] `chatwork-slack-bridge-overview.md` 更新（`chatwork_rooms.slack_channel_id` を nullable 化 + `room_type` 追加 / `POST /chatwork/webhook` 実装反映 / 新 env・Secrets（`CHATWORK_WEBHOOK_TOKEN`/`CHATWORK_API_TOKEN`/`SLACK_BOT_TOKEN`/`SLACK_DEFAULT_*_CHANNEL_ID`）追記 / 表示例からアクションボタン削除）※review_rules で overview 更新漏れは重大扱い
 
 ### Phase 4-R: サービス・ルート レビューゲート [orchestrator]
-- [ ] T013-R: Phase 4 の spec-review + spec-test（冪等性 / FK 順序・my 保存前 skip / 整合性方針 / アダプタ境界 / 公開エンドポイント最小 / ルーティング網羅 / **overview 更新漏れ確認** / カバレッジ 80%）
+- [x] T013-R: Phase 4 の spec-review + spec-test（冪等性 / FK 順序・my 保存前 skip / 整合性方針 / アダプタ境界 / 公開エンドポイント最小 / ルーティング網羅 / **overview 更新漏れ確認** / カバレッジ 80%）
 
 ### Phase 5: 最終品質ゲート・受け入れ確認・PR [orchestrator]
-- [ ] T014: Final Quality Gate（`pnpm lint` / `pnpm typecheck` / `pnpm test` 一括 + 受け入れ基準確認 + **overview 更新の反映確認** + 受け入れ確認（実 Slack API 手動確認 と モック/fake adapter 確認を分離。CON-005））
-- [ ] T015: PR 作成（Issue #3 紐付け）
+- [x] T014: Final Quality Gate（`pnpm lint` / `pnpm typecheck` / `pnpm test` 一括 + 受け入れ基準確認 + **overview 更新の反映確認** + 受け入れ確認（実 Slack API 手動確認 と モック/fake adapter 確認を分離。CON-005））
+- [x] T015: PR 作成（Issue #3 紐付け）
 
 ## 2.1 優先度・実装順
 

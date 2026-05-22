@@ -53,8 +53,15 @@ docker run --rm \
   -e DATABASE_URL='postgres://<USER>:<PASSWORD>@<HOST>:5432/<DB>?sslmode=require' \
   -e DB_POOLED=false \
   -e LOG_LEVEL=info \
+  -e CHATWORK_WEBHOOK_TOKEN='<CHATWORK_WEBHOOK_TOKEN>' \
+  -e CHATWORK_API_TOKEN='<CHATWORK_API_TOKEN>' \
+  -e SLACK_BOT_TOKEN='<SLACK_BOT_TOKEN>' \
+  -e SLACK_DEFAULT_GROUP_CHANNEL_ID='<SLACK_DEFAULT_GROUP_CHANNEL_ID>' \
+  -e SLACK_DEFAULT_DM_CHANNEL_ID='<SLACK_DEFAULT_DM_CHANNEL_ID>' \
   chatwork-slack-bridge:local
 ```
+
+> forwarding フェーズ以降、上記 5 変数（トークン 3 + チャンネル ID 2）は `ConfigSchema` で必須のため、未指定だと起動時に `ConfigError` で停止します。最小構成例（前述）はこれらの注入を省いているため、forwarding を動かす場合は本例のように全変数を渡してください。トークンの実値はシェル履歴・ログに残さない（`--env-file` 推奨）。
 
 > Neon の **pooled**（PgBouncer transaction mode）エンドポイントを使う場合は `DB_POOLED=true` を指定してください
 > （prepared statement を無効化します）。direct エンドポイントなら `false`（既定）のままで構いません。
@@ -78,6 +85,11 @@ curl -i http://localhost:8080/health
 | 変数 | 必須 | 既定値 | 説明 |
 |------|:----:|--------|------|
 | `DATABASE_URL` | 必須 | なし | PostgreSQL 接続文字列。例: `postgres://<USER>:<PASSWORD>@<HOST>:5432/<DB>?sslmode=require`。`SECRET_BACKEND=env` のとき本変数を直接注入する |
+| `CHATWORK_WEBHOOK_TOKEN` | 必須 | なし | Chatwork Webhook 署名検証用トークン（base64・秘密）。`env` 運用では実値を直接注入する |
+| `CHATWORK_API_TOKEN` | 必須 | なし | Chatwork API（`GET /rooms` 等）トークン（秘密）。`env` 運用では実値を直接注入する |
+| `SLACK_BOT_TOKEN` | 必須 | なし | Slack 投稿用 Bot トークン（`chat:write`・秘密）。`env` 運用では実値を直接注入する |
+| `SLACK_DEFAULT_GROUP_CHANNEL_ID` | 必須 | なし | group 種別の集約フォールバック Slack チャンネル ID（非秘密の設定値） |
+| `SLACK_DEFAULT_DM_CHANNEL_ID` | 必須 | なし | direct 種別の集約フォールバック Slack チャンネル ID（非秘密の設定値） |
 | `SECRET_BACKEND` | 任意 | `env` | secret 取得バックエンド。Docker 単体 / VPS は **`env`**。Cloud Run は `gcp`（[cloud-run.md](./cloud-run.md)） |
 | `PORT` | 任意 | `8080`（イメージ既定） / スキーマ既定 `3000` | listen ポート。イメージは `ENV PORT=8080` を設定済みなので未指定なら 8080。`-e` で上書き可 |
 | `NODE_ENV` | 任意 | `production`（イメージ既定） | 実行環境（`development` / `test` / `production`）。runner で `ENV NODE_ENV=production` 済み |
@@ -89,6 +101,9 @@ curl -i http://localhost:8080/health
 
 > `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` は **`SECRET_BACKEND=gcp` のときのみ必須**です
 > （`SECRET_BACKEND=env` では使いません）。Cloud Run 運用の詳細は [cloud-run.md](./cloud-run.md) を参照。
+>
+> forwarding フェーズで追加した 5 変数（`CHATWORK_WEBHOOK_TOKEN` / `CHATWORK_API_TOKEN` / `SLACK_BOT_TOKEN` / `SLACK_DEFAULT_GROUP_CHANNEL_ID` / `SLACK_DEFAULT_DM_CHANNEL_ID`）は `ConfigSchema` で必須です。`env` 運用ではトークンの実値を直接注入します（**実値はイメージに焼き込まず、シェル履歴・ログに残さない**）。
+> `SECRET_BACKEND=gcp` 運用では 3 つのトークンは Secret Manager から取得するため、env には実値ではなくシークレット名（`CHATWORK_WEBHOOK_TOKEN_SECRET` / `CHATWORK_API_TOKEN_SECRET` / `SLACK_BOT_TOKEN_SECRET`）を渡します（チャンネル ID 2 件は非秘密のため値をそのまま渡す）。詳細は [cloud-run.md](./cloud-run.md)。
 
 ### .env ファイルからの注入
 
@@ -136,6 +151,6 @@ curl -i http://localhost:3000/health
 
 このページの環境変数は以下と一致しています。
 
-- `src/config/env.ts`（`ConfigSchema`）: `DATABASE_URL` / `PORT` / `LOG_LEVEL` / `NODE_ENV` / `DB_HEALTH_TIMEOUT_MS` / `SECRET_BACKEND` / `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` / `DB_POOLED`。
+- `src/config/env.ts`（`ConfigSchema`）: `DATABASE_URL` / `PORT` / `LOG_LEVEL` / `NODE_ENV` / `DB_HEALTH_TIMEOUT_MS` / `SECRET_BACKEND` / `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` / `DB_POOLED` / `CHATWORK_WEBHOOK_TOKEN` / `CHATWORK_API_TOKEN` / `SLACK_BOT_TOKEN` / `SLACK_DEFAULT_GROUP_CHANNEL_ID` / `SLACK_DEFAULT_DM_CHANNEL_ID`。
 - `Dockerfile`: runner の `ENV NODE_ENV=production` / `ENV PORT=8080` / `EXPOSE 8080`。
-- `.github/workflows/deploy-cloud-run.yml`: Cloud Run は `SECRET_BACKEND=gcp` で `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` / `DB_POOLED=true` を `--set-env-vars` に渡し、`DATABASE_URL` は Secret Manager 経由で取得（env への直書きなし）。Docker 単体 / VPS はこれと対照的に `SECRET_BACKEND=env` で `DATABASE_URL` を直接注入する運用です。
+- `.github/workflows/deploy-cloud-run.yml`: Cloud Run は `SECRET_BACKEND=gcp` で `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` / `DB_POOLED=true` / `CHATWORK_WEBHOOK_TOKEN_SECRET` / `CHATWORK_API_TOKEN_SECRET` / `SLACK_BOT_TOKEN_SECRET` / `SLACK_DEFAULT_GROUP_CHANNEL_ID` / `SLACK_DEFAULT_DM_CHANNEL_ID` を `--set-env-vars` に渡し、トークンの秘密の実値（`DATABASE_URL` / `*_TOKEN`）は Secret Manager 経由で取得（env への直書きなし）。Docker 単体 / VPS はこれと対照的に `SECRET_BACKEND=env` でトークンの実値を直接注入する運用です。

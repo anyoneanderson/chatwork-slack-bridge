@@ -17,7 +17,33 @@ vi.mock("@google-cloud/secret-manager", () => ({
 
 const PROJECT_ID = "example-project";
 const DATABASE_URL_SECRET = "example-database-url-secret";
+const CHATWORK_WEBHOOK_TOKEN_SECRET = "example-chatwork-webhook-token-secret";
+const CHATWORK_API_TOKEN_SECRET = "example-chatwork-api-token-secret";
+const SLACK_BOT_TOKEN_SECRET = "example-slack-bot-token-secret";
 const DATABASE_URL_VALUE = "postgres://bridge_user:bridge_pass@db.example.com:5432/bridge";
+// DUMMY token values（実トークンではない / CON-005）。
+const CHATWORK_WEBHOOK_TOKEN_VALUE = "dummy-chatwork-webhook-token";
+const CHATWORK_API_TOKEN_VALUE = "dummy-chatwork-api-token";
+const SLACK_BOT_TOKEN_VALUE = "xoxb-dummy-slack-bot-token";
+
+// Secret Manager で prefetch する秘密キーと、それに対応するシークレット名・期待値。
+// 注: createGcpSecretProvider は SECRET_MANAGER_KEYS の順序でアクセスする。
+const SECRET_NAMES = {
+  DATABASE_URL: DATABASE_URL_SECRET,
+  CHATWORK_WEBHOOK_TOKEN: CHATWORK_WEBHOOK_TOKEN_SECRET,
+  CHATWORK_API_TOKEN: CHATWORK_API_TOKEN_SECRET,
+  SLACK_BOT_TOKEN: SLACK_BOT_TOKEN_SECRET,
+} as const;
+
+const SECRET_VALUES = {
+  DATABASE_URL: DATABASE_URL_VALUE,
+  CHATWORK_WEBHOOK_TOKEN: CHATWORK_WEBHOOK_TOKEN_VALUE,
+  CHATWORK_API_TOKEN: CHATWORK_API_TOKEN_VALUE,
+  SLACK_BOT_TOKEN: SLACK_BOT_TOKEN_VALUE,
+} as const;
+
+type PrefetchedKey = keyof typeof SECRET_NAMES;
+const PREFETCHED_KEYS = Object.keys(SECRET_NAMES) as PrefetchedKey[];
 
 const originalLogLevel = process.env.LOG_LEVEL;
 
@@ -29,8 +55,24 @@ function secretVersionResponse(data: string | undefined) {
 function buildOptions() {
   return {
     projectId: PROJECT_ID,
-    secretNames: { DATABASE_URL: DATABASE_URL_SECRET },
+    secretNames: { ...SECRET_NAMES },
   };
+}
+
+/**
+ * 全ての prefetch 対象シークレットに対し、シークレット名から正しい値を返すモックを仕込む。
+ * createGcpSecretProvider の `name` 引数からシークレット名を逆引きして対応値を返す。
+ */
+function mockAllSecretsResolve() {
+  accessSecretVersionMock.mockImplementation((req: { name: string }) => {
+    const entry = PREFETCHED_KEYS.find((key) =>
+      req.name.includes(`/secrets/${SECRET_NAMES[key]}/`),
+    );
+    if (!entry) {
+      throw new Error("unexpected secret name");
+    }
+    return Promise.resolve(secretVersionResponse(SECRET_VALUES[entry]));
+  });
 }
 
 beforeEach(() => {
@@ -48,29 +90,70 @@ afterEach(() => {
 
 describe("createGcpSecretProvider", () => {
   it("returns the prefetched DATABASE_URL value via synchronous get", async () => {
-    accessSecretVersionMock.mockResolvedValue(secretVersionResponse(DATABASE_URL_VALUE));
+    mockAllSecretsResolve();
 
     const provider = await createGcpSecretProvider(buildOptions());
 
     expect(provider.get("DATABASE_URL")).toBe(DATABASE_URL_VALUE);
-    expect(accessSecretVersionMock).toHaveBeenCalledTimes(1);
+    // DATABASE_URL に加え forwarding フェーズのトークン 3 種を prefetch する（計 4 回）。
+    expect(accessSecretVersionMock).toHaveBeenCalledTimes(4);
     expect(accessSecretVersionMock).toHaveBeenCalledWith({
       name: `projects/${PROJECT_ID}/secrets/${DATABASE_URL_SECRET}/versions/latest`,
     });
   });
 
+  it("prefetches and caches the forwarding token secrets via synchronous get", async () => {
+    mockAllSecretsResolve();
+
+    const provider = await createGcpSecretProvider(buildOptions());
+
+    // 新トークン系秘密がキャッシュから同期的に返ること（DUMMY 値 / CON-005）。
+    expect(provider.get("CHATWORK_WEBHOOK_TOKEN")).toBe(CHATWORK_WEBHOOK_TOKEN_VALUE);
+    expect(provider.get("CHATWORK_API_TOKEN")).toBe(CHATWORK_API_TOKEN_VALUE);
+    expect(provider.get("SLACK_BOT_TOKEN")).toBe(SLACK_BOT_TOKEN_VALUE);
+
+    // 各トークンのシークレット名で Secret Manager を呼ぶこと。
+    expect(accessSecretVersionMock).toHaveBeenCalledWith({
+      name: `projects/${PROJECT_ID}/secrets/${CHATWORK_WEBHOOK_TOKEN_SECRET}/versions/latest`,
+    });
+    expect(accessSecretVersionMock).toHaveBeenCalledWith({
+      name: `projects/${PROJECT_ID}/secrets/${CHATWORK_API_TOKEN_SECRET}/versions/latest`,
+    });
+    expect(accessSecretVersionMock).toHaveBeenCalledWith({
+      name: `projects/${PROJECT_ID}/secrets/${SLACK_BOT_TOKEN_SECRET}/versions/latest`,
+    });
+  });
+
+  it("falls back to env for the Slack channel-id keys (config values, not Secret Manager secrets)", async () => {
+    mockAllSecretsResolve();
+    // チャンネル ID は秘密ではなく設定値のため env から取得する（DUMMY 値 / CON-005）。
+    process.env.SLACK_DEFAULT_GROUP_CHANNEL_ID = "C0DUMMYGROUP";
+    process.env.SLACK_DEFAULT_DM_CHANNEL_ID = "C0DUMMYDM";
+
+    const provider = await createGcpSecretProvider(buildOptions());
+
+    expect(provider.get("SLACK_DEFAULT_GROUP_CHANNEL_ID")).toBe("C0DUMMYGROUP");
+    expect(provider.get("SLACK_DEFAULT_DM_CHANNEL_ID")).toBe("C0DUMMYDM");
+
+    delete process.env.SLACK_DEFAULT_GROUP_CHANNEL_ID;
+    delete process.env.SLACK_DEFAULT_DM_CHANNEL_ID;
+  });
+
   it("requests the configured version when version option is provided", async () => {
-    accessSecretVersionMock.mockResolvedValue(secretVersionResponse(DATABASE_URL_VALUE));
+    mockAllSecretsResolve();
 
     await createGcpSecretProvider({ ...buildOptions(), version: "3" });
 
     expect(accessSecretVersionMock).toHaveBeenCalledWith({
       name: `projects/${PROJECT_ID}/secrets/${DATABASE_URL_SECRET}/versions/3`,
     });
+    expect(accessSecretVersionMock).toHaveBeenCalledWith({
+      name: `projects/${PROJECT_ID}/secrets/${SLACK_BOT_TOKEN_SECRET}/versions/3`,
+    });
   });
 
   it("falls back to env for non-secret keys", async () => {
-    accessSecretVersionMock.mockResolvedValue(secretVersionResponse(DATABASE_URL_VALUE));
+    mockAllSecretsResolve();
     process.env.LOG_LEVEL = "debug";
 
     const provider = await createGcpSecretProvider(buildOptions());
@@ -79,7 +162,7 @@ describe("createGcpSecretProvider", () => {
   });
 
   it("returns undefined for non-secret keys absent from env", async () => {
-    accessSecretVersionMock.mockResolvedValue(secretVersionResponse(DATABASE_URL_VALUE));
+    mockAllSecretsResolve();
     delete process.env.LOG_LEVEL;
 
     const provider = await createGcpSecretProvider(buildOptions());
@@ -109,14 +192,27 @@ describe("createGcpSecretProvider", () => {
   });
 
   it("retries on a transient failure and then succeeds", async () => {
-    accessSecretVersionMock
-      .mockRejectedValueOnce(new Error("transient"))
-      .mockResolvedValueOnce(secretVersionResponse(DATABASE_URL_VALUE));
+    // 最初の DATABASE_URL アクセスのみ一過性失敗 → リトライ成功。残りキーは通常解決させる。
+    let firstAttempt = true;
+    accessSecretVersionMock.mockImplementation((req: { name: string }) => {
+      if (req.name.includes(`/secrets/${DATABASE_URL_SECRET}/`) && firstAttempt) {
+        firstAttempt = false;
+        return Promise.reject(new Error("transient"));
+      }
+      const entry = PREFETCHED_KEYS.find((key) =>
+        req.name.includes(`/secrets/${SECRET_NAMES[key]}/`),
+      );
+      if (!entry) {
+        throw new Error("unexpected secret name");
+      }
+      return Promise.resolve(secretVersionResponse(SECRET_VALUES[entry]));
+    });
 
     const provider = await createGcpSecretProvider(buildOptions());
 
     expect(provider.get("DATABASE_URL")).toBe(DATABASE_URL_VALUE);
-    expect(accessSecretVersionMock).toHaveBeenCalledTimes(2);
+    // 4 キー prefetch + DATABASE_URL の 1 回リトライ = 5 回。
+    expect(accessSecretVersionMock).toHaveBeenCalledTimes(5);
   });
 
   it("wraps a persistent SDK failure in SecretAccessError without leaking the secret name", async () => {

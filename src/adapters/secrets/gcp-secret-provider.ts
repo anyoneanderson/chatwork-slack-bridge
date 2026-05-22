@@ -4,8 +4,18 @@ import { SecretAccessError, type SecretKey, type SecretProvider } from "@/adapte
 import { withRetry } from "@/with-retry";
 import { withTimeout } from "@/with-timeout";
 
-/** Secret Manager から取得する「秘密」キー（Phase 2 は DATABASE_URL のみ）。 */
-const SECRET_MANAGER_KEYS = ["DATABASE_URL"] as const satisfies readonly SecretKey[];
+/**
+ * Secret Manager から取得する「秘密」キー。
+ *
+ * DATABASE_URL に加え、forwarding フェーズのトークン系秘密（Chatwork webhook / Chatwork API /
+ * Slack Bot）を prefetch する。Slack チャンネル ID は秘密ではなく設定値のため env に残す。
+ */
+const SECRET_MANAGER_KEYS = [
+  "DATABASE_URL",
+  "CHATWORK_WEBHOOK_TOKEN",
+  "CHATWORK_API_TOKEN",
+  "SLACK_BOT_TOKEN",
+] as const satisfies readonly SecretKey[];
 
 type SecretManagerKey = (typeof SECRET_MANAGER_KEYS)[number];
 
@@ -30,7 +40,8 @@ export interface GcpSecretProviderOptions {
 /**
  * Secret Manager から対象シークレットを起動時にプリフェッチし、同期 `SecretProvider` を返す。
  *
- * 秘密キー（`DATABASE_URL`）はメモリにキャッシュした値を返し、それ以外のキーは内部の
+ * 秘密キー（`DATABASE_URL` / `CHATWORK_WEBHOOK_TOKEN` / `CHATWORK_API_TOKEN` / `SLACK_BOT_TOKEN`）は
+ * メモリにキャッシュした値を返し、それ以外のキーは内部の
  * `EnvSecretProvider` にフォールバックする。Secret Manager 呼び出しは `withTimeout`
  * （既定 5000ms）と `withRetry`（指数バックオフ・最大 2 回）で囲む。認証は ADC を用いる。
  *
