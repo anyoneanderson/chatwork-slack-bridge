@@ -92,3 +92,33 @@ export const chatworkMessages = pgTable(
     check("chatwork_messages_status_check", sql`${table.status} in ('open','done')`),
   ],
 );
+
+/**
+ * Chatwork ルームメンバー（account_id → 表示名のキャッシュ）。
+ *
+ * webhook payload に送信者名が無いため、Chatwork メンバー API で取得した名前をここに
+ * キャッシュし、毎回 API を叩かない（レート制限回避）。`chatwork_room_id` は FK で
+ * `chatwork_rooms.chatwork_room_id` を参照し、`(chatwork_room_id, chatwork_account_id)`
+ * を unique にして冪等 upsert を担保する（REQ-003 / NFR-004）。
+ */
+export const chatworkRoomMembers = pgTable(
+  "chatwork_room_members",
+  {
+    id: bigint("id", { mode: "bigint" }).generatedAlwaysAsIdentity().primaryKey(),
+    chatworkRoomId: text("chatwork_room_id")
+      .notNull()
+      .references(() => chatworkRooms.chatworkRoomId),
+    chatworkAccountId: text("chatwork_account_id").notNull(),
+    name: text("name").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique("chatwork_room_members_room_account_unique").on(
+      table.chatworkRoomId,
+      table.chatworkAccountId,
+    ),
+    // FK index（PostgreSQL は FK に自動で index を張らない / coding-rules [MUST]）。
+    index("chatwork_room_members_room_idx").on(table.chatworkRoomId),
+  ],
+);
