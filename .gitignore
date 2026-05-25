@@ -32,3 +32,6 @@ pnpm-debug.log*
 .DS_Store
 .idea/
 .vscode/
+
+# Setup-guide screenshots may contain real tokens/IDs/names — keep out of the public repo until manually redacted
+docs/setup-guide/screenshots/

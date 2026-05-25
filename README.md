@@ -22,7 +22,9 @@ Slack action/reply → Bridge API (Hono) → PostgreSQL → Chatwork API
 
 ## ドキュメント
 
+- [セットアップマニュアル](docs/setup-guide/README.md) — Slack アプリ / Chatwork Webhook / Secret Manager / GitHub 変数の設定手順
 - [システム概要](chatwork-slack-bridge-overview.md)
+- [Cloud Run デプロイ手順](docs/deploy/cloud-run.md) / [Docker 単体デプロイ手順](docs/deploy/docker.md)
 - [コーディングルール](docs/coding-rules.md)
 - [レビュー基準](docs/review_rules.md)
 - [開発ワークフロー（Issue → PR）](docs/issue-to-pr-workflow.md)
