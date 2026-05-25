@@ -6,7 +6,7 @@ import type { WebhookPayload } from "@/adapters/chatwork/webhook-schema";
 import type { SlackClient } from "@/adapters/slack/client";
 import { toSlackChannelId, toSlackTs } from "@/adapters/slack/types";
 import { type ForwardMessageDeps, forwardMessage } from "@/app/services/forward-message";
-import { chatworkMessages, chatworkRooms, type RoomType } from "@/db/schema";
+import { chatworkMessages, chatworkRoomMembers, chatworkRooms, type RoomType } from "@/db/schema";
 
 // DUMMY 値（実 room/channel ID・実本文・実クライアント名を含まない / CON-005）。
 const DEFAULT_GROUP = toSlackChannelId("C0DUMMYGROUP");
@@ -40,9 +40,17 @@ interface DbScript {
    * - 初見ルーム: SELECT は 2 回（1回目=first-sight 検出 / 2回目=upsert 後の再 SELECT）。
    *   例: `[ [], [confirmedRow] ]`。
    *
-   * 添字が列を超えた場合は最後の結果セットを返す（呼び出し回数の揺れに頑健にする）。
+   * 添字が列を超えた場合は最後の結果セットを返す（呼び出し回数の揺れに頑回にする）。
    */
   roomSelects: RoomRow[][];
+  /**
+   * `chatwork_room_members` の SELECT が返す結果セット（送信者名解決の cache / refresh 後の再 SELECT）。
+   *
+   * 既存テストは送信者名解決の経路を追加して以降も**挙動を維持**することが目的のため、デフォルト
+   * （未指定）では空配列（cache miss）として扱う。`resolveSenderName` は `getRoomMembers` のデフォルト
+   * 例外をログ＋null で握り、`forwardMessage` は senderName=null のままフローを継続する。
+   */
+  memberSelects?: Array<{ name: string }>[];
   /** messages insert ... returning() が返す行（空配列 = 再送/重複）。 */
   insertReturning: Array<{ id: bigint }>;
   /** true のとき update().set().where() の Promise を reject する（ts UPDATE 失敗の再現）。 */
@@ -59,6 +67,8 @@ interface CapturedDb {
   callOrder: string[];
   /** `chatwork_rooms` SELECT の回数。 */
   roomSelectCount: number;
+  /** `chatwork_room_members` SELECT の回数。 */
+  memberSelectCount: number;
 }
 
 /**
@@ -83,6 +93,7 @@ function makeDbMock(script: DbScript): { db: { db: unknown }; captured: Captured
     updateSets: [],
     callOrder: [],
     roomSelectCount: 0,
+    memberSelectCount: 0,
   };
 
   const db = {
@@ -91,11 +102,21 @@ function makeDbMock(script: DbScript): { db: { db: unknown }; captured: Captured
         from(table: unknown) {
           captured.selectFromTables.push(table);
           captured.callOrder.push("select");
-          // この SELECT が返す結果セットを呼び出し順で確定する（範囲外は末尾を使う）。
-          const idx = captured.roomSelectCount;
-          captured.roomSelectCount += 1;
-          const sets = script.roomSelects;
-          const rows = sets.length === 0 ? [] : (sets[Math.min(idx, sets.length - 1)] ?? []);
+          // SELECT 対象テーブルで結果セットを切り替える（rooms / room_members）。
+          // 既存テストは rooms SELECT の回数・順序を検証するため、`roomSelectCount` は
+          // rooms SELECT のみカウントする（members SELECT は別カウンタ）。
+          let rows: unknown[];
+          if (table === chatworkRoomMembers) {
+            const idx = captured.memberSelectCount;
+            captured.memberSelectCount += 1;
+            const sets = script.memberSelects ?? [];
+            rows = sets.length === 0 ? [] : (sets[Math.min(idx, sets.length - 1)] ?? []);
+          } else {
+            const idx = captured.roomSelectCount;
+            captured.roomSelectCount += 1;
+            const sets = script.roomSelects;
+            rows = sets.length === 0 ? [] : (sets[Math.min(idx, sets.length - 1)] ?? []);
+          }
           return {
             where(_cond: unknown) {
               return {
@@ -123,6 +144,11 @@ function makeDbMock(script: DbScript): { db: { db: unknown }; captured: Captured
               };
               result.returning = (_cols: unknown) => Promise.resolve(script.insertReturning);
               return result;
+            },
+            // members upsert（resolve-sender）は onConflictDoUpdate を使う。
+            // 結果は await されるのみ（returning を呼ばない）ため Promise<undefined> を返す。
+            onConflictDoUpdate(_opts: unknown) {
+              return Promise.resolve(undefined);
             },
           };
         },
@@ -292,8 +318,18 @@ describe("forwardMessage", () => {
       expect(roomsIdx).toBeGreaterThanOrEqual(0);
       expect(messagesIdx).toBeGreaterThanOrEqual(0);
       expect(roomsIdx).toBeLessThan(messagesIdx);
-      // 順序: select(first) → insert(rooms) → select(re) → insert(messages)。
-      expect(captured.callOrder).toEqual(["select", "insert", "select", "insert", "update"]);
+      // 順序: select(rooms first) → insert(rooms) → select(rooms re) → select(members cache miss)
+      //   → insert(messages) → update。送信者名解決（resolveSenderName）が rooms 解決後・
+      //   messages INSERT の前に割り込み、members キャッシュを 1 回 SELECT する（cache miss → API
+      //   は未設定で throw → 内部で握って null を返す → members の INSERT は発行されない）。
+      expect(captured.callOrder).toEqual([
+        "select",
+        "insert",
+        "select",
+        "select",
+        "insert",
+        "update",
+      ]);
     });
 
     it("does not call getRoom for a known (cached) room (single SELECT)", async () => {
@@ -538,6 +574,107 @@ describe("forwardMessage", () => {
       const slackErr = logs.find((l) => l.payload.op === "forward.slack.post");
       expect(slackErr).toBeDefined();
       expect(serializeLogs(logs)).not.toContain(DUMMY_BODY);
+    });
+  });
+
+  describe("sender name resolution (REQ-002 / REQ-004 / 設計 §2)", () => {
+    it("persists senderName to chatwork_messages when getRoomMembers returns the target", async () => {
+      // Arrange: 既知 group ルーム / members キャッシュは miss → API がターゲットを含む配列を返す。
+      // 再 SELECT で確定行が返り、resolveSenderName は表示名を返す → senderName が persist される。
+      const { deps, captured, postMessage } = makeDeps({
+        script: {
+          roomSelects: knownRoom(),
+          memberSelects: [[], [{ name: DUMMY_SENDER_NAME }]],
+          insertReturning: [{ id: 51n }],
+        },
+        postMessage: async () => ({ ts: DUMMY_TS }),
+      });
+      // chatworkClient.getRoomMembers をデフォルト fail から差し替える（forward は ChatworkClient を 1 つだけ持つ）。
+      (
+        deps.chatworkClient as unknown as { getRoomMembers: (...a: unknown[]) => Promise<unknown> }
+      ).getRoomMembers = vi.fn(async () => [{ accountId: "1001", name: DUMMY_SENDER_NAME }]);
+
+      // Act
+      await forwardMessage(makeEvent({ account_id: 1001 }), deps);
+
+      // Assert: senderName が messages 行に "Dummy Sender" として書かれる（null ではない）。
+      const messageValues = captured.insertValues.find(
+        (v): v is { senderName: unknown; chatworkAccountId: unknown } =>
+          typeof v === "object" && v !== null && "chatworkAccountId" in v && "senderName" in v,
+      );
+      expect(messageValues).toBeDefined();
+      expect((messageValues as { senderName: unknown }).senderName).toBe(DUMMY_SENDER_NAME);
+
+      // refresh が走った（members SELECT が 2 回: cache miss → 再 SELECT）。
+      expect(captured.memberSelectCount).toBe(2);
+      // Slack 投稿は行われる。
+      expect(postMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("persists senderName as null and still completes forwarding when getRoomMembers throws", async () => {
+      // Arrange: 既知 group ルーム / members キャッシュ miss + API が ChatworkApiError を投げる。
+      // resolve-sender は内部で握って null を返し、forward は accountId フォールバックで投稿継続する（CON-001）。
+      const { deps, captured, postMessage } = makeDeps({
+        script: {
+          roomSelects: knownRoom(),
+          memberSelects: [[]],
+          insertReturning: [{ id: 53n }],
+        },
+        postMessage: async () => ({ ts: DUMMY_TS }),
+      });
+      (
+        deps.chatworkClient as unknown as { getRoomMembers: (...a: unknown[]) => Promise<unknown> }
+      ).getRoomMembers = vi.fn(async () => {
+        throw new ChatworkApiError("chatwork.getRoomMembers", 403);
+      });
+
+      // Act: 例外は伝播しない。
+      await expect(forwardMessage(makeEvent({ account_id: 1001 }), deps)).resolves.toBeUndefined();
+
+      // Assert: senderName は null で persist される（REQ-004 / フォールバック）。
+      const messageValues = captured.insertValues.find(
+        (v): v is { senderName: unknown; chatworkAccountId: unknown } =>
+          typeof v === "object" && v !== null && "chatworkAccountId" in v && "senderName" in v,
+      );
+      expect(messageValues).toBeDefined();
+      expect((messageValues as { senderName: unknown }).senderName).toBeNull();
+
+      // forwarding は完走する: Slack 投稿が 1 回、ts UPDATE が 1 回。
+      expect(postMessage).toHaveBeenCalledTimes(1);
+      expect(captured.updateTables).toContain(chatworkMessages);
+
+      // 投稿テキストは accountId フォールバック（"1001"）を含み、表示名行に立つ。
+      const [, message] = postMessage.mock.calls[0] as [unknown, { text: string }];
+      expect(message.text).toContain("1001:");
+      expect(message.text).not.toContain(`${DUMMY_SENDER_NAME}:`);
+    });
+
+    it("passes roomId + messageId + senderName to format() (text contains deep link and display name)", async () => {
+      // Arrange: 解決済み senderName + 既知 group ルームで投稿させる。
+      const { deps, postMessage } = makeDeps({
+        script: {
+          roomSelects: knownRoom(),
+          memberSelects: [[], [{ name: DUMMY_SENDER_NAME }]],
+          insertReturning: [{ id: 55n }],
+        },
+        postMessage: async () => ({ ts: DUMMY_TS }),
+      });
+      (
+        deps.chatworkClient as unknown as { getRoomMembers: (...a: unknown[]) => Promise<unknown> }
+      ).getRoomMembers = vi.fn(async () => [{ accountId: "1001", name: DUMMY_SENDER_NAME }]);
+
+      // Act
+      await forwardMessage(makeEvent({ account_id: 1001 }), deps);
+
+      // Assert: postMessage に渡るテキストに表示名 + ディープリンクが含まれる。
+      expect(postMessage).toHaveBeenCalledTimes(1);
+      const [channel, message] = postMessage.mock.calls[0] as [unknown, { text: string }];
+      expect(channel).toBe(DEFAULT_GROUP);
+      expect(message.text).toContain(`${DUMMY_SENDER_NAME}:`);
+      // ディープリンクは roomId + messageId 由来（fixture: room_id=2002 / message_id="msg-3003"）。
+      expect(message.text).toContain(
+        "<https://www.chatwork.com/#!rid2002-msg-3003|Chatworkで開く>",
+      );
     });
   });
 
