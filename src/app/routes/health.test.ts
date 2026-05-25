@@ -47,6 +47,7 @@ function createTestDeps(ping: DbClient["ping"]) {
   // /health は外部 client を使わないが、AppDeps を満たすためのスタブ（呼ばれない）。
   const chatworkClient: ChatworkClient = {
     getRoom: vi.fn<ChatworkClient["getRoom"]>(),
+    getRoomMembers: vi.fn<ChatworkClient["getRoomMembers"]>(),
   };
   const slackClient: SlackClient = {
     postMessage: vi.fn<SlackClient["postMessage"]>(),
