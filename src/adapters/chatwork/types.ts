@@ -56,3 +56,16 @@ export function toChatworkRoomId(value: string): ChatworkRoomId {
 export function toChatworkMessageId(value: string): ChatworkMessageId {
   return value as ChatworkMessageId;
 }
+
+/**
+ * Chatwork ルームのメンバー情報（`getRoomMembers` の戻り値要素）。
+ *
+ * Chatwork API の `account_id` は数値だが、本プロジェクトでは DB・ログ・整形のいずれも
+ * 文字列で扱うため、ここでも文字列に統一する（`text` 列との突き合わせを安全にするため）。
+ */
+export interface ChatworkMember {
+  /** Chatwork アカウント ID（API の `account_id` を文字列化したもの）。 */
+  accountId: string;
+  /** メンバーの表示名。 */
+  name: string;
+}

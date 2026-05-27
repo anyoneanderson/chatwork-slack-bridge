@@ -84,15 +84,49 @@ OSS本体は以下で動く構成にする。
 4. Slack の専用チャンネルに投稿する。
 5. Slack の `channel_id`、`ts`、`thread_ts` を PostgreSQL に保存する。
 
-Slack 表示例（forwarding フェーズは本文＋メタの text 投稿のみ。アクションボタンは後続フェーズ）。
+Slack 表示例（forwarding + sender-name フェーズ。本文＋メタの text 投稿のみ。アクションボタンは後続フェーズ）。
 
 ```text
 [Chatwork] 株式会社Example / 案件A
-田中さん:
-明日のMTGですが、15時に変更可能でしょうか？
+Taro Yamada:
+明日のMTGですが、15時に変更可能でしょうか😊
+📎 report.pdf (1.2MB)
+<https://www.chatwork.com/#!rid1234567-8901234|Chatworkで開く>
 ```
 
-> アクションボタン（`[返信案を作る] [Chatworkで開く] [対応済みにする]` 等）は slack-reply / ops-safety
+書式は以下のとおり（sender-name フェーズで導入）。
+
+```text
+[Chatwork] {ルーム名}
+{表示名 or account_id}:
+{整形済み本文（[download]→📎、[info]/[title] 展開、絵文字、引用 > など）}
+<https://www.chatwork.com/#!rid{room}-{msg}|Chatworkで開く>
+```
+
+before / after（sender-name 導入前後）。
+
+```text
+# before（forwarding フェーズ時点）
+[Chatwork] 株式会社Example / 案件A
+9999999:
+明日のMTGですが、15時に変更可能でしょうか(blush)
+[info][title]ファイル[/title][download:111]report.pdf (1.2MB)[/download][/info]
+
+# after（sender-name フェーズ）
+[Chatwork] 株式会社Example / 案件A
+Taro Yamada:
+明日のMTGですが、15時に変更可能でしょうか😊
+ファイル
+📎 report.pdf (1.2MB)
+<https://www.chatwork.com/#!rid1234567-8901234|Chatworkで開く>
+```
+
+> 送信者は webhook payload では `account_id`（数字）しか得られないため、Chatwork メンバー API
+> （`GET /rooms/{room_id}/members`）で表示名へ解決し、`chatwork_room_members` テーブルにキャッシュする。
+> キャッシュミス時は1メッセージあたり最大1回リフレッシュし、それでも解決できなければ `account_id`
+> を表示にフォールバック（`chatwork_messages.sender_name` は null のまま）して転送は止めない。
+
+> アクションボタン（`[返信案を作る] [対応済みにする]` 等）は slack-reply / ops-safety
 > 以降で追加する。forwarding フェーズの投稿はトップレベルの text のみで、`slack_thread_ts` は null。
 
 ### 2. Slack から Chatwork に返信
@@ -195,6 +229,33 @@ create index chatwork_messages_status_idx
   on chatwork_messages (status);
 ```
 
+> `sender_name` は sender-name フェーズで populate されるようになった。Chatwork メンバー API
+> （`GET /rooms/{room_id}/members`）で `chatwork_account_id` から解決した表示名を保存する。
+> 解決できなかった場合のみ null のまま（Slack 表示は `account_id` フォールバック）。
+
+### `chatwork_room_members`
+
+```sql
+create table chatwork_room_members (
+  id bigint generated always as identity primary key,
+  chatwork_room_id text not null references chatwork_rooms(chatwork_room_id),
+  chatwork_account_id text not null,
+  name text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (chatwork_room_id, chatwork_account_id)
+);
+
+create index chatwork_room_members_room_idx
+  on chatwork_room_members (chatwork_room_id);
+```
+
+> sender-name フェーズで追加。`account_id → 表示名` のキャッシュ。webhook payload には送信者名が
+> 含まれないため、初出の account_id を見たら Chatwork メンバー API で取得して upsert する
+> （1メッセージあたり最大1リフレッシュ）。リフレッシュ時は取得した全メンバーを upsert することで
+> 名前変更にも追従する。`chatwork_rooms` と同様に DB に持つことで Cloud Run のマルチインスタンス /
+> 再起動でも共有・永続される。
+
 ### `outbound_messages`
 
 ```sql
@@ -275,11 +336,17 @@ Chatwork Webhook を受ける（forwarding フェーズで実装済み）。公�
    名前・種別を取得して `enabled=true` / `slack_channel_id=null` でキャッシュする（payload に種別が無いため）。
    初見ルームの取得に失敗した場合は保存せず `200`（FK を満たせないため。Chatwork の再送に委ねる）。
    `room_type = my` は保存も投稿もせず `200`。
-5. **重複チェック / 保存**: `unique (chatwork_room_id, chatwork_message_id)` ＋ `onConflictDoNothing` で
-   再送を弾き、新規のみ `chatwork_messages` に保存する（冪等）。
-6. **ルーティング転送**: マトリックス（紐付け済み → 専用チャンネル / 未紐付け → 種別集約 / `enabled=false`
-   → 保存のみ）に従い Slack へ投稿し、`slack_channel_id` / `slack_ts` を保存する。投稿失敗時は保存を
-   維持し（`slack_ts` は null）、ログに記録する（リトライは後続フェーズ）。
+5. **送信者名解決**（sender-name フェーズで追加）: `chatwork_room_members` を `(room_id, account_id)` で
+   参照する。ヒットしなければ `GET /rooms/{room_id}/members` を1回だけ呼び、全メンバーを upsert して
+   再参照する。それでも見つからない、または API 失敗時は `account_id` フォールバック（`sender_name` は
+   null）で転送は継続する。
+6. **重複チェック / 保存**: `unique (chatwork_room_id, chatwork_message_id)` ＋ `onConflictDoNothing` で
+   再送を弾き、新規のみ `chatwork_messages` に保存する（冪等）。解決した表示名を `sender_name` に含める。
+7. **ルーティング転送**: マトリックス（紐付け済み → 専用チャンネル / 未紐付け → 種別集約 / `enabled=false`
+   → 保存のみ）に従い Slack へ投稿し、`slack_channel_id` / `slack_ts` を保存する。投稿時には Chatwork
+   記法を可読テキストへ整形（絵文字ショートコード変換・`[info]`/`[title]`/`[download]` 等の展開）し、
+   メッセージへのディープリンク（`https://www.chatwork.com/#!rid{room}-{msg}`）を付与する。投稿失敗時
+   は保存を維持し（`slack_ts` は null）、ログに記録する（リトライは後続フェーズ）。
 
 ### `POST /slack/events`
 

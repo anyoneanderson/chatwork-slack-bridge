@@ -1,6 +1,7 @@
+import { getTableConfig } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
-import { MESSAGE_STATUS, ROOM_TYPES } from "@/db/schema";
+import { chatworkRoomMembers, chatworkRooms, MESSAGE_STATUS, ROOM_TYPES } from "@/db/schema";
 
 /**
  * TS 側の union と DB の CHECK 制約集合のズレを検出する軽量テスト。
@@ -21,5 +22,91 @@ describe("schema unions match design CHECK sets", () => {
     const expected = ["open", "done"] as const;
     expect([...MESSAGE_STATUS]).toEqual([...expected]);
     expect(new Set(MESSAGE_STATUS).size).toBe(MESSAGE_STATUS.length);
+  });
+});
+
+/**
+ * `chatwork_room_members` の構造検証（sender-name design §3.1 / coding-rules `[MUST]`）。
+ *
+ * 既存テストと同じく DB は起動せず、Drizzle の `getTableConfig` で
+ * 列・FK・index・unique を TS 側から検査する。表示名キャッシュの設計が
+ * forwarding スキーマ規約（identity PK / timestamptz / 明示 index / unique）と
+ * 揃っていることを担保する。
+ */
+describe("chatwork_room_members schema (sender-name design §3.1)", () => {
+  const cfg = getTableConfig(chatworkRoomMembers);
+  const col = (name: string) => {
+    const c = cfg.columns.find((x) => x.name === name);
+    if (!c) throw new Error(`column not found: ${name}`);
+    return c;
+  };
+
+  it("uses the expected table name", () => {
+    expect(cfg.name).toBe("chatwork_room_members");
+  });
+
+  it("has bigint identity primary key on id", () => {
+    const id = col("id");
+    expect(id.getSQLType()).toBe("bigint");
+    expect(id.primary).toBe(true);
+    expect(id.notNull).toBe(true);
+    // generated always as identity（design §3.1）
+    expect((id as unknown as { generatedIdentity?: { type: string } }).generatedIdentity).toEqual({
+      type: "always",
+    });
+  });
+
+  it("has NOT NULL text columns for chatwork_room_id / chatwork_account_id / name", () => {
+    for (const name of ["chatwork_room_id", "chatwork_account_id", "name"]) {
+      const c = col(name);
+      expect(c.getSQLType()).toBe("text");
+      expect(c.notNull).toBe(true);
+      expect(c.hasDefault).toBe(false);
+    }
+  });
+
+  it("has NOT NULL timestamptz created_at / updated_at with defaults", () => {
+    for (const name of ["created_at", "updated_at"]) {
+      const c = col(name);
+      expect(c.getSQLType()).toBe("timestamp with time zone");
+      expect(c.notNull).toBe(true);
+      expect(c.hasDefault).toBe(true);
+    }
+  });
+
+  it("has unique(chatwork_room_id, chatwork_account_id) for idempotent upsert (REQ-003)", () => {
+    const uniques = cfg.uniqueConstraints.map((u) => ({
+      name: u.name,
+      columns: u.columns.map((c) => c.name),
+    }));
+    expect(uniques).toContainEqual({
+      name: "chatwork_room_members_room_account_unique",
+      columns: ["chatwork_room_id", "chatwork_account_id"],
+    });
+  });
+
+  it("has explicit index on chatwork_room_id (FK index / coding-rules [MUST])", () => {
+    const indexes = cfg.indexes.map((i) => ({
+      name: i.config.name,
+      columns: i.config.columns.map((c) => (c as { name: string }).name),
+    }));
+    expect(indexes).toContainEqual({
+      name: "chatwork_room_members_room_idx",
+      columns: ["chatwork_room_id"],
+    });
+  });
+
+  it("has FK chatwork_room_id -> chatwork_rooms.chatwork_room_id", () => {
+    expect(cfg.foreignKeys).toHaveLength(1);
+    const fk = cfg.foreignKeys[0];
+    if (!fk) throw new Error("foreign key missing");
+    const ref = fk.reference();
+    expect(ref.columns.map((c) => c.name)).toEqual(["chatwork_room_id"]);
+    expect(ref.foreignColumns.map((c) => c.name)).toEqual(["chatwork_room_id"]);
+    expect(getTableConfig(ref.foreignTable).name).toBe(getTableConfig(chatworkRooms).name);
+  });
+
+  it("has no CHECK constraints (no enum-like columns in this table)", () => {
+    expect(cfg.checks).toEqual([]);
   });
 });

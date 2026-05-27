@@ -7,6 +7,7 @@ import type { WebhookPayload } from "@/adapters/chatwork/webhook-schema";
 import type { SlackClient } from "@/adapters/slack/client";
 import { format } from "@/adapters/slack/format";
 import { type SlackChannelId, toSlackChannelId } from "@/adapters/slack/types";
+import { resolveSenderName } from "@/app/services/resolve-sender";
 import { type ResolveTargetDeps, resolveTarget } from "@/app/services/resolve-target";
 import type { DbClient } from "@/db/client";
 import { chatworkMessages, chatworkRooms, type RoomType } from "@/db/schema";
@@ -54,12 +55,15 @@ interface ResolvedRoom {
  *    使い `getRoom` を呼ばないため、この失敗の影響を受けない。
  * 2. `room_type = my` なら保存も投稿もせず return（CON-003）。メタ行は手順1でキャッシュ済みのため
  *    再受信時は `getRoom` を呼ばず即 skip できる。
- * 3. `chatwork_messages` に `onConflictDoNothing` で INSERT し `returning` で挿入有無を判定する
- *    （親ルーム行があり FK を満たす）。既存（再送）なら空配列が返るので return（二重投稿しない）。
- * 4. `resolveTarget` で投稿先を決定。`disabled`（skip）なら保存のみで return。
- * 5. `post` なら `slackClient.postMessage` を呼び、戻り `ts` で `chatwork_messages` を UPDATE する。
+ * 3. `resolveSenderName` で送信者表示名を解決する（REQ-002 / 設計 §2）。キャッシュ→ミス時1回
+ *    リフレッシュ→失敗/不在は null（呼び出し側で account_id フォールバック）。例外は投げない。
+ * 4. `chatwork_messages` に `onConflictDoNothing` で INSERT し `returning` で挿入有無を判定する
+ *    （親ルーム行があり FK を満たす）。手順3 で解決した `sender_name` を含める（REQ-004）。
+ *    既存（再送）なら空配列が返るので return（二重投稿しない）。
+ * 5. `resolveTarget` で投稿先を決定。`disabled`（skip）なら保存のみで return。
+ * 6. `post` なら `slackClient.postMessage` を呼び、戻り `ts` で `chatwork_messages` を UPDATE する。
  *
- * 整合性方針（NFR-005）: メッセージ INSERT（手順3）は Slack 投稿（手順5）より先にコミットされ、
+ * 整合性方針（NFR-005）: メッセージ INSERT（手順4）は Slack 投稿（手順6）より先にコミットされ、
  * Slack 投稿は外部呼び出しのため DB トランザクション外で行う。Slack 投稿が失敗してもメッセージは
  * DB に残り（`slack_ts` は null）、ops-safety フェーズの queue/リトライで再投稿できる。これは
  * 「getRoom 失敗で保存しない」ケース（FK を満たせない）とは区別される。
@@ -97,15 +101,26 @@ export async function forwardMessage(event: WebhookEvent, deps: ForwardMessageDe
     return;
   }
 
-  // 手順3: メッセージ保存（冪等）。親ルーム行があり FK を満たす。
+  // 手順3: 送信者名を解決する（REQ-002 / 設計 §2 / §4.2）。キャッシュ→ミス時1回リフレッシュ→
+  // 失敗 or 不在は null（呼び出し側で account_id フォールバック）。`resolveSenderName` は例外を
+  // 投げず常に `string | null` を返すため、転送フロー（CON-001 非破壊）は止まらない。
+  // 防御的に accountId が空なら resolve をスキップし null とする（webhook 検証済み payload では
+  // 通常起こり得ないが、要件「解決できなければ null」と整合させる）。
+  const accountId = String(event.account_id);
+  const senderName =
+    accountId.length === 0
+      ? null
+      : await resolveSenderName(toChatworkRoomId(roomId), accountId, deps);
+
+  // 手順4: メッセージ保存（冪等）。親ルーム行があり FK を満たす。解決できた表示名は
+  // `sender_name` に保存し、解決不能時は null のまま（REQ-004）。
   const inserted = await deps.db.db
     .insert(chatworkMessages)
     .values({
       chatworkRoomId: roomId,
       chatworkMessageId: messageId,
-      chatworkAccountId: String(event.account_id),
-      // payload に送信者名は無い。Phase 3 は null（ASM-002 / REQ-005）。
-      senderName: null,
+      chatworkAccountId: accountId,
+      senderName,
       body: event.body,
       // send_time は epoch 秒。timestamptz 列へ Date に変換して保存する。
       sentAt: new Date(event.send_time * 1000),
@@ -124,7 +139,7 @@ export async function forwardMessage(event: WebhookEvent, deps: ForwardMessageDe
   }
   const messageRowId = insertedRow.id;
 
-  // 手順4: ルーティング判定。disabled は保存のみで終了。room は権威ある DB 行のため
+  // 手順5: ルーティング判定。disabled は保存のみで終了。room は権威ある DB 行のため
   // slackChannelId はそのまま渡せる（resolveTarget が受け取る SlackChannelId | null）。
   const target = resolveTarget(
     {
@@ -142,13 +157,22 @@ export async function forwardMessage(event: WebhookEvent, deps: ForwardMessageDe
     return;
   }
 
-  // 手順5: Slack 投稿（DB トランザクション外）。失敗してもメッセージは保存済みで残る（NFR-005）。
+  // 手順6: Slack 投稿（DB トランザクション外）。失敗してもメッセージは保存済みで残る（NFR-005）。
   const channelId = target.channelId;
   let ts: string;
   try {
     const result = await deps.slackClient.postMessage(
       channelId,
-      format({ accountId: String(event.account_id), body: event.body }, { name: room.roomName }),
+      format(
+        {
+          accountId,
+          senderName,
+          body: event.body,
+          roomId,
+          messageId,
+        },
+        { name: room.roomName },
+      ),
     );
     ts = result.ts;
   } catch (err) {
