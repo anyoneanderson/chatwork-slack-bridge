@@ -87,12 +87,17 @@ function convertTags(input: string): string {
  *
  * 辞書に無いショートコードは原文維持（誤マッピングよりも維持を優先 / 設計 §4.3）。
  *
+ * **キー長の降順で適用**する。ASCII 系には部分文字列被り（例: `,':|` ⊃ `:|`、`(^^;)` ⊃
+ * 単体 `(`）が存在するため、短いキーを先に処理すると長いキーが食われる。降順ソートで
+ * 「最長一致」相当の挙動を担保する（#22）。
+ *
  * @param input タグ変換済みの本文
  * @returns 絵文字置換済みの本文
  */
 function replaceEmoticons(input: string): string {
   let s = input;
-  for (const [key, value] of Object.entries(CHATWORK_EMOTICONS)) {
+  const entries = Object.entries(CHATWORK_EMOTICONS).sort(([a], [b]) => b.length - a.length);
+  for (const [key, value] of entries) {
     // ショートコードに正規表現メタ文字（`(`/`)`/`^`/`;` 等）が含まれるため、
     // `RegExp` ではなく `replaceAll` の文字列引数を使う（全置換・メタ文字無視）。
     s = s.replaceAll(key, value);
