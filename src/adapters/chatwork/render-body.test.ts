@@ -241,6 +241,95 @@ describe("renderChatworkBody — combined / end-to-end", () => {
   });
 });
 
+describe("renderChatworkBody — ASCII emoticons (#22)", () => {
+  it("replaces each ASCII emoticon with its mapped unicode emoji", () => {
+    // Arrange: Chatwork の ASCII 系絵文字（顔文字）が変換されること（受け入れ基準）。
+    const cases: ReadonlyArray<[string, string]> = [
+      ["8-)", CHATWORK_EMOTICONS["8-)"]],
+      [":)", CHATWORK_EMOTICONS[":)"]],
+      [";)", CHATWORK_EMOTICONS[";)"]],
+      [":D", CHATWORK_EMOTICONS[":D"]],
+      [":p", CHATWORK_EMOTICONS[":p"]],
+      [":o", CHATWORK_EMOTICONS[":o"]],
+      [":(", CHATWORK_EMOTICONS[":("]],
+      [";(", CHATWORK_EMOTICONS[";("]],
+      [":|", CHATWORK_EMOTICONS[":|"]],
+      [":^)", CHATWORK_EMOTICONS[":^)"]],
+      ["|-)", CHATWORK_EMOTICONS["|-)"]],
+      [":!", CHATWORK_EMOTICONS[":!"]],
+      [":?", CHATWORK_EMOTICONS[":?"]],
+      [":#", CHATWORK_EMOTICONS[":#"]],
+    ];
+
+    // Act + Assert
+    for (const [code, expected] of cases) {
+      expect(renderChatworkBody(`pre ${code} post`)).toBe(`pre ${expected} post`);
+    }
+  });
+
+  it("does not let `:|` cannibalize `,':|` (longest-key-first substring guard)", () => {
+    // Arrange: `,':|`（冷や汗）は末尾に `:|` を含む。降順ソートが効いていなければ `:|`
+    // が先に置換されて `,':|` が崩れる。
+    const expectedColdSweat = CHATWORK_EMOTICONS[",':|"];
+    const input = "hello ,':| world";
+
+    // Act
+    const output = renderChatworkBody(input);
+
+    // Assert
+    expect(output).toBe(`hello ${expectedColdSweat} world`);
+  });
+
+  it("handles ASCII emoticons without surrounding whitespace (Chatwork-style inline)", () => {
+    // Arrange: ユーザは `テスト8-):p` のように空白なしで連結することがある。
+    // Slack 側の :emoji: パーサとぶつからないよう、ASCII 系も置換できる必要がある。
+    const expectedCool = CHATWORK_EMOTICONS["8-)"];
+    const expectedTongue = CHATWORK_EMOTICONS[":p"];
+    const input = "テスト8-):p";
+
+    // Act
+    const output = renderChatworkBody(input);
+
+    // Assert
+    expect(output).toBe(`テスト${expectedCool}${expectedTongue}`);
+  });
+
+  it("does not convert ASCII tokens that are not in the dictionary", () => {
+    // Arrange: 例として `:x` は辞書に無いため原文維持。
+    const input = "before :x after";
+
+    // Act
+    const output = renderChatworkBody(input);
+
+    // Assert
+    expect(output).toBe("before :x after");
+  });
+});
+
+describe("renderChatworkBody — additional paren emoticons (#22)", () => {
+  it("replaces newly added paren-style emoticons", () => {
+    // Arrange: #22 で追加された主要 paren 系絵文字。
+    const cases: ReadonlyArray<[string, string]> = [
+      ["(nod)", CHATWORK_EMOTICONS["(nod)"]],
+      ["(shake)", CHATWORK_EMOTICONS["(shake)"]],
+      ["(bow)", CHATWORK_EMOTICONS["(bow)"]],
+      ["(roger)", CHATWORK_EMOTICONS["(roger)"]],
+      ["(please)", CHATWORK_EMOTICONS["(please)"]],
+      ["(quick)", CHATWORK_EMOTICONS["(quick)"]],
+      ["(anger)", CHATWORK_EMOTICONS["(anger)"]],
+      ["(F)", CHATWORK_EMOTICONS["(F)"]],
+      ["(*)", CHATWORK_EMOTICONS["(*)"]],
+      ["(^)", CHATWORK_EMOTICONS["(^)"]],
+      ["(:/)", CHATWORK_EMOTICONS["(:/)"]],
+    ];
+
+    // Act + Assert
+    for (const [code, expected] of cases) {
+      expect(renderChatworkBody(`x ${code} y`)).toBe(`x ${expected} y`);
+    }
+  });
+});
+
 describe("renderChatworkBody — purity", () => {
   it("is deterministic: identical input yields identical output", () => {
     // Arrange
