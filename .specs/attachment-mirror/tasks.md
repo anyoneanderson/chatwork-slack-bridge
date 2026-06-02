@@ -23,7 +23,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 1-R: 基盤レビューゲート [orchestrator]
 
-- [ ] T002-R: Phase 1 の spec-review + spec-test
+- [x] T002-R: Phase 1 の spec-review + spec-test
   - スキーマ `[MUST]` 準拠（identity / timestamptz / FK 明示 index / unique / `text` 型）
   - forwarding / sender-name スキーマ非破壊（既存 migration ファイル不変）
   - migration 連番に欠番がないこと
