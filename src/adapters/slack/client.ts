@@ -1,5 +1,10 @@
 import { WebClient } from "@slack/web-api";
-import type { SlackChannelId, SlackMessage, SlackTs } from "@/adapters/slack/types";
+import type {
+  SlackChannelId,
+  SlackMessage,
+  SlackTs,
+  SlackUploadFileInput,
+} from "@/adapters/slack/types";
 import { toSlackTs } from "@/adapters/slack/types";
 
 /**
@@ -52,6 +57,20 @@ export interface SlackClient {
    *   bot token・本文を含めない（操作名／チャンネル ID／Slack エラーコードのみ）
    */
   postMessage(channelId: SlackChannelId, message: SlackMessage): Promise<{ ts: SlackTs }>;
+
+  /**
+   * 指定スレッドにファイルをアップロードする（`files.uploadV2` / REQ-003）。
+   *
+   * `input.bytes`（`Uint8Array`）は adapter 内部で `Buffer.from` に変換してから SDK に渡す
+   * （`@slack/web-api` の `file` 引数型は `Buffer | Stream | string` / ASM-003）。本文投稿の
+   * `threadTs` を `thread_ts` に渡し、本文と添付の対応をスレッドで明示する（REQ-005）。
+   *
+   * @param input アップロード入力（チャンネル ID／スレッド `ts`／ファイル名／MIME／バイト列）
+   * @returns Slack 側で採番された `file.id`（`{ slackFileId }`）
+   * @throws SlackApiError API 失敗（`ok: false`）・例外送出・`file.id` 欠落時。エラーには
+   *   bot token・ファイル名・バイトを含めない（操作名／チャンネル ID／Slack エラーコードのみ）
+   */
+  uploadFile(input: SlackUploadFileInput): Promise<{ slackFileId: string }>;
 }
 
 /**
@@ -90,7 +109,97 @@ export function createSlackClient(deps: { botToken: string }): SlackClient {
 
       return { ts: toSlackTs(response.ts) };
     },
+
+    async uploadFile(input: SlackUploadFileInput): Promise<{ slackFileId: string }> {
+      const op = "slack.uploadFile";
+
+      let response: Awaited<ReturnType<typeof web.files.uploadV2>>;
+      try {
+        response = await web.files.uploadV2({
+          channel_id: input.channelId,
+          thread_ts: input.threadTs,
+          filename: input.filename,
+          // ASM-003: SDK の `file` 型は `Buffer | Stream | string`。`Uint8Array` は
+          // 直接渡せないため必ず Buffer 化する（Codex 重大指摘）。
+          file: Buffer.from(input.bytes),
+        });
+      } catch (error) {
+        // SDK は API エラー（platform / rate-limit / network）で例外を送出する。
+        // 生エラーには token・ファイル名・バイトを載せず、Slack のエラーコードのみ抽出する。
+        throw new SlackApiError(op, input.channelId, extractSlackErrorCode(error));
+      }
+
+      if (response.ok === false) {
+        // ok: false は SDK が例外化しないケースもあるため明示的に弾く。
+        throw new SlackApiError(op, input.channelId, response.error);
+      }
+
+      const slackFileId = extractSlackFileId(response);
+      if (slackFileId === undefined) {
+        // 成功扱いでも file.id が取れない（レスポンス形ブレ・欠落）場合は失敗とする。
+        throw new SlackApiError(op, input.channelId, response.error);
+      }
+
+      return { slackFileId };
+    },
   };
+}
+
+/**
+ * `files.uploadV2` のレスポンスから Slack の `file.id` を取り出す。
+ *
+ * 現行 SDK（`@slack/web-api ^7.16.0`）は `{ ok, files: FilesCompleteUploadExternalResponse[] }`
+ * を返し、各要素が `files?: [{ id }]` を持つ **入れ子**構造になる（ASM-003）。過渡期の旧 SDK 形
+ * （`{ files: [{ id }] }` / `{ file: { id } }`）も保険としてフォールバックで吸収する。
+ *
+ * バイト・ファイル名・token は参照せず、`id`（識別子）のみを抽出する（NFR-002）。
+ *
+ * @param response `files.uploadV2` の戻り値（型は緩いため `unknown` 扱いで解析）
+ * @returns Slack の `file.id`。どの形にもマッチしなければ undefined
+ */
+function extractSlackFileId(response: unknown): string | undefined {
+  if (typeof response !== "object" || response === null) {
+    return undefined;
+  }
+
+  const files = (response as { files?: unknown }).files;
+  if (Array.isArray(files) && files.length > 0) {
+    const first = files[0];
+    if (typeof first === "object" && first !== null) {
+      // 1. 主: 現行 SDK の入れ子形 response.files[0].files[0].id
+      const nested = (first as { files?: unknown }).files;
+      if (Array.isArray(nested) && nested.length > 0) {
+        const nestedId = extractId(nested[0]);
+        if (nestedId !== undefined) {
+          return nestedId;
+        }
+      }
+      // 2. 旧形 a: response.files[0].id
+      const flatId = extractId(first);
+      if (flatId !== undefined) {
+        return flatId;
+      }
+    }
+  }
+
+  // 3. 旧形 b: response.file.id
+  return extractId((response as { file?: unknown }).file);
+}
+
+/**
+ * 任意の値から `id`（文字列）フィールドを安全に取り出す。
+ *
+ * @param value 検査対象（オブジェクト以外・id 欠落・非文字列は undefined）
+ * @returns `id` の文字列値。取得できなければ undefined
+ */
+function extractId(value: unknown): string | undefined {
+  if (typeof value === "object" && value !== null) {
+    const id = (value as { id?: unknown }).id;
+    if (typeof id === "string") {
+      return id;
+    }
+  }
+  return undefined;
 }
 
 /**

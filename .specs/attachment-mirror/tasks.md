@@ -64,7 +64,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 3: slack adapter（アップロード）[code]
 
-- [ ] T006: [REQ-003] `adapters/slack/client.ts` に `uploadFile(input)` 追加
+- [x] T006: [REQ-003] `adapters/slack/client.ts` に `uploadFile(input)` 追加
   - **`file` 引数は `Buffer.from(input.bytes)` で変換**してから SDK に渡す（ASM-003 / `@slack/web-api ^7.16.0` の `file` 型は `Buffer | Stream | string` / Codex 指摘）
   - `web.files.uploadV2({ channel_id, thread_ts, filename, file: Buffer.from(bytes), ... })` を呼ぶ
   - **レスポンス抽出ヘルパ `extractSlackFileId(response)`**（入れ子形主・旧形フォールバック）を内部実装:
