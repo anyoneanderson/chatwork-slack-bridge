@@ -14,10 +14,10 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 1: スキーマ・migration [code]
 
-- [ ] T001: [REQ-007] `db/schema.ts` に `chatwork_message_attachments` を定義
+- [x] T001: [REQ-007] `db/schema.ts` に `chatwork_message_attachments` を定義
   - identity PK / `bigint` FK → `chatwork_messages.id` + 明示 index / `unique (chatwork_message_id, chatwork_file_id)` / `timestamptz` / `text` カラム（`chatwork_file_id` / `slack_file_id` / `slack_channel_id` / `slack_thread_ts`）
   - design §3.1 のスキーマと一致
-- [ ] T002: [REQ-007] `pnpm db:generate` で migration 生成 → compose 上 PostgreSQL で `pnpm db:migrate` 適用確認
+- [x] T002: [REQ-007] `pnpm db:generate` で migration 生成 → compose 上 PostgreSQL で `pnpm db:migrate` 適用確認
   - 既存 `chatwork_room_members`（#17）の次番号として生成されること
   - rollback 想定: テーブル DROP のみ（既存テーブル変更なし）
 
