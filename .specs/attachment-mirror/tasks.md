@@ -153,7 +153,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 5: 最終品質ゲート・受け入れ確認・PR [orchestrator]
 
-- [ ] T011: Final Quality Gate
+- [x] T011: Final Quality Gate
   - `pnpm lint` / `pnpm typecheck` / `pnpm test`（カバレッジ 80%）パス
   - 受け入れ基準 8 項目（requirement.md §6）の全達成確認
   - overview / setup-guide 反映確認
