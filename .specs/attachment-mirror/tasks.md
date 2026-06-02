@@ -127,7 +127,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 4-R: サービス・結線・ドキュメントレビューゲート [orchestrator]
 
-- [ ] T010-R: Phase 4 の spec-review + spec-test
+- [x] T010-R: Phase 4 の spec-review + spec-test
   - `mirrorAttachments` テスト網羅:
     - 添付なし → 何もせず正常 return
     - 全件成功 → mapping 行が件数分作成

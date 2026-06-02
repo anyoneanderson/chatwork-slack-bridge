@@ -618,7 +618,8 @@ create table message_embeddings (
 - MCP検索
 - 過去ログ一括取り込み
 - 複数Slackチャンネルへの柔軟なルーティング
-- 添付ファイル同期
+- Slack → Chatwork の添付転送（#4。Chatwork → Slack の添付ミラーは attachment-mirror フェーズで実装済み）
+- Chatwork 側の添付削除に追従した Slack 側の削除同期
 - Chatworkメッセージ編集/削除の同期
 - Teams 連携
 
@@ -782,7 +783,7 @@ Google Cloud は Secret Manager）。
 
 - `CHATWORK_WEBHOOK_TOKEN`: Webhook 署名検証用トークン（base64）。
 - `CHATWORK_API_TOKEN`: ルームメタ取得（`GET /rooms/{id}`）用トークン。
-- `SLACK_BOT_TOKEN`: Slack 投稿（`chat.postMessage`）用 Bot トークン（`chat:write` スコープ）。
+- `SLACK_BOT_TOKEN`: Slack 投稿（`chat.postMessage`）・添付アップロード（`files.uploadV2`）用 Bot トークン（`chat:write` / `files:write` スコープ）。
 - `SLACK_DEFAULT_GROUP_CHANNEL_ID`: `group` 種別の集約フォールバックチャンネル（秘密ではなく設定値）。
 - `SLACK_DEFAULT_DM_CHANNEL_ID`: `direct` 種別の集約フォールバックチャンネル（秘密ではなく設定値）。
 
