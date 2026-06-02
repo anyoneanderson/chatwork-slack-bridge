@@ -94,7 +94,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 4: サービス・結線・ドキュメント [code]
 
-- [ ] T007: [REQ-005/006] `app/services/mirror-attachments.ts` 新規作成
+- [x] T007: [REQ-005/006] `app/services/mirror-attachments.ts` 新規作成
   - `mirrorAttachments(input, deps)` を export（design §4.4）
   - フロー: 抽出 → 既アップロード判定（mapping SELECT）→ 未アップロードのみ逐次処理（メタ取得 → サイズチェック → バイト取得 → Slack アップロード → mapping `onConflictDoNothing` 記録）
   - **例外を投げない**契約（各 file の try/catch で握る・全体外側にも try/catch）
@@ -102,7 +102,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
   - 構造化ログ: `op: "forward.mirror.{uploaded,too_large,failed,done}"`（識別子のみ・本文・URL・バイト非出力）
   - 依存: T001, T003, T004, T005, T006
 
-- [ ] T008: [REQ-005] `app/services/forward-message.ts` 結線
+- [x] T008: [REQ-005] `app/services/forward-message.ts` 結線
   - 既存 `forward.posted` ログの**直前**（または直後）に `mirrorAttachments` 呼び出しを追加
   - 入力: `chatworkRoomId` / `chatworkMessageId`（外部）/ `messageRowId`（FK 親 / `insertedRow.id`）/ `body` / `slackChannelId` / `slackThreadTs`
   - 二重防御の outer try/catch（`forward.mirror.unexpected` ログ。`resolveSenderName` outer try/catch と同パターン / handover 経緯）
