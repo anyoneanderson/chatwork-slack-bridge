@@ -48,6 +48,8 @@ function createTestDeps(ping: DbClient["ping"]) {
   const chatworkClient: ChatworkClient = {
     getRoom: vi.fn<ChatworkClient["getRoom"]>(),
     getRoomMembers: vi.fn<ChatworkClient["getRoomMembers"]>(),
+    getFileDownloadUrl: vi.fn<ChatworkClient["getFileDownloadUrl"]>(),
+    downloadFile: vi.fn<ChatworkClient["downloadFile"]>(),
   };
   const slackClient: SlackClient = {
     postMessage: vi.fn<SlackClient["postMessage"]>(),
