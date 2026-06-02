@@ -163,7 +163,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
     - 100MB 超過ファイルでフォールバック（テキスト表示のみ）になること
     - 同じ webhook を 2 回手動 POST しても 2 回アップロードされないこと（mapping ユニーク制約）
 
-- [ ] T012: PR 作成
+- [x] T012: PR 作成
   - spec PR（docs ブランチ・本タスクリスト含む `.specs/attachment-mirror/` 3 点セット）
   - 実装 PR（feature ブランチ / `Closes #18` で紐付け / Conventional Commits 英語）
   - 既存 #15/#16, #20/#21 と同様に **spec PR と実装 PR を分離**
