@@ -79,7 +79,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 3-R: slack adapter レビューゲート [orchestrator]
 
-- [ ] T006-R: Phase 3 の spec-review + spec-test
+- [x] T006-R: Phase 3 の spec-review + spec-test
   - `uploadFile`:
     - **入れ子形**（`{ files: [{ files: [{ id }] }] }`、現行 SDK 主形）→ `file.id` 抽出 ✓
     - 旧形 a（`{ files: [{ id }] }`）→ 抽出 ✓

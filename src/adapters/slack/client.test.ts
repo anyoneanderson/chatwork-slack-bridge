@@ -295,6 +295,10 @@ describe("createSlackClient.uploadFile", () => {
       thread_ts: DUMMY_TS,
       filename: "dummy.png",
     });
+    // MIME は uploadV2 へ渡さない（uploadV2 に MIME 引数は無く、filetype は MIME でなく非推奨）。
+    // この設計判断（input.mimeType を SDK に渡さない）を将来のリグレッションから守るガード。
+    expect(callArg).not.toHaveProperty("content_type");
+    expect(callArg).not.toHaveProperty("filetype");
   });
 
   it("converts the Uint8Array bytes to a Buffer before passing to files.uploadV2 (ASM-003)", async () => {
