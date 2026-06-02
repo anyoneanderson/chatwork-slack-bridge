@@ -56,7 +56,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 2-R: chatwork adapter レビューゲート [orchestrator]
 
-- [ ] T005-R: Phase 2 の spec-review + spec-test
+- [x] T005-R: Phase 2 の spec-review + spec-test
   - `getFileDownloadUrl`: 正常マップ / 不正レスポンス形状 / 非 2xx（401 / 404 / 429 / 500）→ `ChatworkApiError` / トークン・ファイル名・URL 非漏洩
   - `downloadFile`: 正常取得 / `Content-Type` 反映（gif / png / pdf / `application/octet-stream` / なし）/ 100MB 超過 → `ChatworkApiError` / ネットワーク失敗 / バイト・URL 非ログ
   - `extractAttachments`: 0 / 1 / 複数件 / 同一 file_id 重複 / `[preview]` 単独（無視）/ 不正トークン（壊さない）/ 長いファイル名（スペース含む）対応
