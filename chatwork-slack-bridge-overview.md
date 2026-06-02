@@ -94,6 +94,18 @@ Taro Yamada:
 <https://www.chatwork.com/#!rid1234567-8901234|Chatworkで開く>
 ```
 
+添付ファイルがある場合は、上の本文投稿の **スレッド**に Chatwork 添付の実体を再アップロードする（attachment-mirror フェーズ / 後述「添付ファイルの取り扱い」）。本文の `📎 report.pdf (1.2MB)` 行はそのまま残り、スレッドに実体が並ぶ二段表示になる。
+
+```text
+[Chatwork] 株式会社Example / 案件A          ← 親メッセージ（chat.postMessage）
+Taro Yamada:
+明日のMTGですが、15時に変更可能でしょうか😊
+📎 report.pdf (1.2MB)
+<https://www.chatwork.com/#!rid1234567-8901234|Chatworkで開く>
+  └─ 🧵 スレッド
+       report.pdf  (Slack 上でプレビュー / ダウンロード可能)   ← files.uploadV2 with thread_ts
+```
+
 書式は以下のとおり（sender-name フェーズで導入）。
 
 ```text
@@ -128,6 +140,41 @@ Taro Yamada:
 
 > アクションボタン（`[返信案を作る] [対応済みにする]` 等）は slack-reply / ops-safety
 > 以降で追加する。forwarding フェーズの投稿はトップレベルの text のみで、`slack_thread_ts` は null。
+
+#### 添付ファイルの取り扱い（(A) フォールバック + (B) Slack 再アップロード）
+
+Chatwork メッセージに添付されたファイルは、次の 2 段構えで Slack に届ける（attachment-mirror フェーズ）。
+
+- **(A) テキスト表示（フォールバック）**: sender-name フェーズで導入した `[download:fileId]ファイル名 (サイズ)[/download]` →
+  `📎 ファイル名 (サイズ)` の整形。本文側に常に残る（render-body は不変）。Slack を見た人は最低限ファイル名と
+  Chatwork ディープリンクから原本へ辿れる。
+- **(B) Slack 再アップロード**: 本文投稿の成功後、本文から file_id を抽出し、Chatwork ファイル API
+  （`GET /rooms/{room_id}/files/{file_id}?create_download_url=1`）で**約30秒の短命ダウンロード URL** とメタを取得して
+  ファイル実体を読み出し、Slack の `files.uploadV2` で**本文投稿の `ts` を `thread_ts` に指定してスレッドに再アップロード**する。
+  これにより Slack 上だけで画像プレビュー／ファイルダウンロードが完結する。
+
+処理順と非破壊性。
+
+1. 本文投稿（`chat.postMessage`）が成功し `slack_ts` を保存した**後**に、添付ミラー処理を割り込み実行する
+   （forwarding / sender-name フローは壊さない）。
+2. 本文から抽出した各 file_id について、`chatwork_message_attachments`（後述）で**既アップロード済みか**を判定し、
+   未アップロードのみ取得 → アップロード → マッピング記録する。
+3. **失敗時はフォールバック**: ファイル取得失敗（404 / 認可 / ネットワーク）・サイズ上限超過・Slack
+   アップロード失敗のいずれでも、本文の (A) テキスト表示が残るため転送は止めない。失敗は識別子のみの
+   構造化ログに残す（トークン・本文・短命 URL・ファイル名・バイトは出さない）。
+
+制約と前提。
+
+- **必要 Slack スコープ**: `chat:write` に加えて **`files:write`**。後から追加する場合はワークスペース再インストール
+  （= Bot トークン変更）が必要で、Secret Manager の `SLACK_BOT_TOKEN` 更新 + Cloud Run 再デプロイまでがワンセット
+  （手順は [`docs/setup-guide/README.md`](docs/setup-guide/README.md) の §7）。
+- **ファイルサイズ上限**: 1 ファイル 100MB（API メタの `filesize` → `Content-Length` → 実バイト長の三段防御）。
+  超過時は (A) フォールバック。
+- **短命 URL** には認証ヘッダを付けず GET する（Chatwork 仕様）。本文・ファイル名・URL・バイトは非ログ。
+- **冪等性は webhook 再送まで保証**: 同じメッセージの再送は既存 `chatwork_messages` の `onConflictDoNothing` で
+  早期 return し添付処理に到達しない。マッピングの二重 insert は `chatwork_message_attachments` の unique 制約で防ぐ。
+  並行 worker による二重アップロードの exactly-once は ops-safety（#5）の領域として後続に残す。
+- スコープ外: Slack → Chatwork の添付転送（#4）、サムネイル生成、ウイルススキャン、Chatwork 側削除への同期。
 
 ### 2. Slack から Chatwork に返信
 
@@ -256,6 +303,34 @@ create index chatwork_room_members_room_idx
 > 名前変更にも追従する。`chatwork_rooms` と同様に DB に持つことで Cloud Run のマルチインスタンス /
 > 再起動でも共有・永続される。
 
+### `chatwork_message_attachments`
+
+```sql
+create table chatwork_message_attachments (
+  id bigint generated always as identity primary key,
+  chatwork_message_id bigint not null references chatwork_messages(id),  -- 内部 PK を参照
+  chatwork_file_id text not null,        -- Chatwork 側の file_id（本文から抽出・文字列化）
+  slack_file_id text not null,           -- files.uploadV2 が返す file.id
+  slack_channel_id text not null,        -- アップロード先チャンネル（監査・将来の retry 用）
+  slack_thread_ts text not null,         -- 本文投稿の ts（スレッド添付先）
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (chatwork_message_id, chatwork_file_id)
+);
+
+create index chatwork_message_attachments_message_idx
+  on chatwork_message_attachments (chatwork_message_id);
+```
+
+> attachment-mirror フェーズで追加。Chatwork 添付を Slack スレッドに再アップロードした対応関係
+> （`(chatwork_message_id, chatwork_file_id) → (slack_file_id, slack_thread_ts)`）を保持する。
+> FK は単一カラム参照を単純化するため外部 ID ではなく内部 PK `chatwork_messages.id` を指す。
+> `unique (chatwork_message_id, chatwork_file_id)` ＋ `onConflictDoNothing` で同一 (メッセージ, ファイル) の
+> 二重 insert を防ぎ、webhook 再送時の二重アップロードを抑止する（再送自体は `chatwork_messages` の
+> `onConflictDoNothing` で早期 return するため添付処理に到達しない）。`slack_channel_id` / `slack_thread_ts` は
+> 実運用では `chatwork_messages` 側と同値だが、ファイル単位の独立性・将来の retry のため重複保持する。
+> 並行 worker の exactly-once（claim 機構 / advisory lock / `status` カラム）は ops-safety（#5）の領域。
+
 ### `outbound_messages`
 
 ```sql
@@ -347,6 +422,11 @@ Chatwork Webhook を受ける（forwarding フェーズで実装済み）。公�
    記法を可読テキストへ整形（絵文字ショートコード変換・`[info]`/`[title]`/`[download]` 等の展開）し、
    メッセージへのディープリンク（`https://www.chatwork.com/#!rid{room}-{msg}`）を付与する。投稿失敗時
    は保存を維持し（`slack_ts` は null）、ログに記録する（リトライは後続フェーズ）。
+8. **添付ミラー**（attachment-mirror フェーズで追加）: 本文投稿成功・`slack_ts` 保存の**後**に、本文から
+   file_id を抽出し、`chatwork_message_attachments` で未アップロードのものだけ Chatwork ファイル API
+   （`create_download_url=1`）→ Slack `files.uploadV2`（`thread_ts` = 本文の `ts`）でスレッドへ再アップロードし、
+   マッピングを記録する。取得・アップロード失敗・100MB 超過時は本文の `📎 ファイル名 (サイズ)` テキスト表示に
+   フォールバックして転送は止めない（識別子のみログ）。
 
 ### `POST /slack/events`
 
@@ -422,6 +502,15 @@ Google Cloud向けに追加するアダプタ。
 - Interactive components
 - Slash commands
 - Event subscriptions
+
+必要な Bot スコープ。
+
+- `chat:write` — メッセージ投稿（forwarding）
+- `files:write` — Chatwork 添付ファイルの Slack 再アップロード（attachment-mirror / `files.uploadV2`）
+
+> `files:write` を稼働中アプリに後から追加する場合はワークスペース再インストールが必要で、Bot トークンが
+> 変わる。Secret Manager の `SLACK_BOT_TOKEN` 更新と Cloud Run 再デプロイまで行うこと
+> （[`docs/setup-guide/README.md`](docs/setup-guide/README.md) §7）。
 
 想定コマンド。
 
@@ -529,7 +618,8 @@ create table message_embeddings (
 - MCP検索
 - 過去ログ一括取り込み
 - 複数Slackチャンネルへの柔軟なルーティング
-- 添付ファイル同期
+- Slack → Chatwork の添付転送（#4。Chatwork → Slack の添付ミラーは attachment-mirror フェーズで実装済み）
+- Chatwork 側の添付削除に追従した Slack 側の削除同期
 - Chatworkメッセージ編集/削除の同期
 - Teams 連携
 
@@ -693,7 +783,7 @@ Google Cloud は Secret Manager）。
 
 - `CHATWORK_WEBHOOK_TOKEN`: Webhook 署名検証用トークン（base64）。
 - `CHATWORK_API_TOKEN`: ルームメタ取得（`GET /rooms/{id}`）用トークン。
-- `SLACK_BOT_TOKEN`: Slack 投稿（`chat.postMessage`）用 Bot トークン（`chat:write` スコープ）。
+- `SLACK_BOT_TOKEN`: Slack 投稿（`chat.postMessage`）・添付アップロード（`files.uploadV2`）用 Bot トークン（`chat:write` / `files:write` スコープ）。
 - `SLACK_DEFAULT_GROUP_CHANNEL_ID`: `group` 種別の集約フォールバックチャンネル（秘密ではなく設定値）。
 - `SLACK_DEFAULT_DM_CHANNEL_ID`: `direct` 種別の集約フォールバックチャンネル（秘密ではなく設定値）。
 

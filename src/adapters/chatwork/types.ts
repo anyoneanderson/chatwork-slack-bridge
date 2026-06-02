@@ -69,3 +69,22 @@ export interface ChatworkMember {
   /** メンバーの表示名。 */
   name: string;
 }
+
+/**
+ * Chatwork ファイルのメタ情報と短命ダウンロード URL（`getFileDownloadUrl` の戻り値 / REQ-001）。
+ *
+ * `download_url` は約 30 秒で失効する署名付き URL（ASM-001）。`downloadFile` への受け渡し以外で
+ * 保持・ログ出力してはならない（NFR-002）。
+ */
+export interface ChatworkFileDownloadInfo {
+  /** Chatwork 側のファイル ID（API の `file_id` を文字列化したもの）。 */
+  fileId: string;
+  /** ファイル名。ログ・エラーには出さない（NFR-002）。 */
+  filename: string;
+  /** ファイルサイズ（バイト）。サイズ上限の事前判定に使う（NFR-006）。 */
+  filesize: number;
+  /** API レスポンスの `mime_type`。含まれない場合は null。 */
+  mimeType: string | null;
+  /** 約 30 秒で失効する短命ダウンロード URL。ログ・エラーには出さない（NFR-002）。 */
+  downloadUrl: string;
+}

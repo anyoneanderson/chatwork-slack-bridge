@@ -6,7 +6,8 @@ import { toChatworkRoomId } from "@/adapters/chatwork/types";
 import type { WebhookPayload } from "@/adapters/chatwork/webhook-schema";
 import type { SlackClient } from "@/adapters/slack/client";
 import { format } from "@/adapters/slack/format";
-import { type SlackChannelId, toSlackChannelId } from "@/adapters/slack/types";
+import { type SlackChannelId, toSlackChannelId, toSlackTs } from "@/adapters/slack/types";
+import { mirrorAttachments } from "@/app/services/mirror-attachments";
 import { resolveSenderName } from "@/app/services/resolve-sender";
 import { type ResolveTargetDeps, resolveTarget } from "@/app/services/resolve-target";
 import type { DbClient } from "@/db/client";
@@ -212,6 +213,36 @@ export async function forwardMessage(event: WebhookEvent, deps: ForwardMessageDe
     { op: "forward.posted", roomId, messageId, channelId, slackTs: ts },
     "forwarded to slack",
   );
+
+  // 手順7: 添付ファイルを Slack スレッドへミラーする（REQ-005 / 設計 §4.5）。
+  // **ts UPDATE 成功後にのみ**呼ぶ。ts UPDATE が失敗した場合は手順6 の catch で return 済みで
+  // あり（thread_ts が無くスレッド指定不能のため）、このコードには到達しない。
+  // `mirrorAttachments` は契約上 throw しない（never-throw）が、二重防御として外側でも catch する
+  // （既存 `resolveSenderName` の outer try/catch と同パターン / handover の Codex 経緯と整合）。
+  // 失敗・skip は内部でログ済みのため、ここでは予期しない throw のみを握って転送フローを生かす。
+  try {
+    await mirrorAttachments(
+      {
+        chatworkRoomId: toChatworkRoomId(roomId),
+        chatworkMessageId: messageId,
+        messageRowId,
+        body: event.body,
+        slackChannelId: channelId,
+        slackThreadTs: toSlackTs(ts),
+      },
+      {
+        db: deps.db,
+        chatworkClient: deps.chatworkClient,
+        slackClient: deps.slackClient,
+        logger: deps.logger,
+      },
+    );
+  } catch (err) {
+    deps.logger.error(
+      { op: "forward.mirror.unexpected", roomId, messageId, channelId, err: serializeError(err) },
+      "attachment mirror threw unexpectedly; ignoring to keep forward flow alive",
+    );
+  }
 }
 
 /**

@@ -14,30 +14,30 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 1: スキーマ・migration [code]
 
-- [ ] T001: [REQ-007] `db/schema.ts` に `chatwork_message_attachments` を定義
+- [x] T001: [REQ-007] `db/schema.ts` に `chatwork_message_attachments` を定義
   - identity PK / `bigint` FK → `chatwork_messages.id` + 明示 index / `unique (chatwork_message_id, chatwork_file_id)` / `timestamptz` / `text` カラム（`chatwork_file_id` / `slack_file_id` / `slack_channel_id` / `slack_thread_ts`）
   - design §3.1 のスキーマと一致
-- [ ] T002: [REQ-007] `pnpm db:generate` で migration 生成 → compose 上 PostgreSQL で `pnpm db:migrate` 適用確認
+- [x] T002: [REQ-007] `pnpm db:generate` で migration 生成 → compose 上 PostgreSQL で `pnpm db:migrate` 適用確認
   - 既存 `chatwork_room_members`（#17）の次番号として生成されること
   - rollback 想定: テーブル DROP のみ（既存テーブル変更なし）
 
 ### Phase 1-R: 基盤レビューゲート [orchestrator]
 
-- [ ] T002-R: Phase 1 の spec-review + spec-test
+- [x] T002-R: Phase 1 の spec-review + spec-test
   - スキーマ `[MUST]` 準拠（identity / timestamptz / FK 明示 index / unique / `text` 型）
   - forwarding / sender-name スキーマ非破壊（既存 migration ファイル不変）
   - migration 連番に欠番がないこと
 
 ### Phase 2: chatwork adapter（ファイル取得）[code]
 
-- [ ] T003: [REQ-001] `adapters/chatwork/client.ts` に `getFileDownloadUrl(roomId, fileId)` 追加
+- [x] T003: [REQ-001] `adapters/chatwork/client.ts` に `getFileDownloadUrl(roomId, fileId)` 追加
   - `GET /rooms/{room_id}/files/{file_id}?create_download_url=1` を `X-ChatWorkToken` で呼ぶ
   - レスポンス検証: `file_id`（**`number | string`** で受けて `String(...)` 化 / 既存 `getRoomMembers` と統一）/ `filename` / `filesize`（number）/ `download_url`（string）必須・`mime_type` 任意
   - 戻り値型 `ChatworkFileDownloadInfo`（`fileId` / `filename` / `filesize` / `mimeType` / `downloadUrl`）を `types.ts` に追加
   - 失敗時 `ChatworkApiError`（status のみ / トークン・URL・ファイル名非含有）
   - `ChatworkClient` インターフェースに追加（既存実装 / モックの双方を更新）
 
-- [ ] T004: [REQ-002] `adapters/chatwork/client.ts` に `downloadFile(downloadUrl, { maxBytes })` 追加
+- [x] T004: [REQ-002] `adapters/chatwork/client.ts` に `downloadFile(downloadUrl, { maxBytes })` 追加
   - `fetch(downloadUrl, { method: "GET" })`（**ヘッダ無し** / ASM-001）
   - `response.arrayBuffer()` → `Uint8Array` に変換
   - `Content-Type` を `mimeType` に取り出す（無ければ null）
@@ -47,7 +47,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
   - `maxBytes` は引数で受ける（テスト容易性 / `mirrorAttachments` の DI と同期）
   - 失敗時 `ChatworkApiError`（URL・バイト非含有）
 
-- [ ] T005: [REQ-004] `adapters/chatwork/extract-attachments.ts` 新規作成
+- [x] T005: [REQ-004] `adapters/chatwork/extract-attachments.ts` 新規作成
   - 純粋関数 `extractAttachments(body: string): ChatworkAttachmentRef[]`
   - 正規表現 `/\[download:(\d+)\][\s\S]*?\[\/download\]/g`
   - 同一 file_id 重複は `Set` で除去（出現順保持）
@@ -56,7 +56,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 2-R: chatwork adapter レビューゲート [orchestrator]
 
-- [ ] T005-R: Phase 2 の spec-review + spec-test
+- [x] T005-R: Phase 2 の spec-review + spec-test
   - `getFileDownloadUrl`: 正常マップ / 不正レスポンス形状 / 非 2xx（401 / 404 / 429 / 500）→ `ChatworkApiError` / トークン・ファイル名・URL 非漏洩
   - `downloadFile`: 正常取得 / `Content-Type` 反映（gif / png / pdf / `application/octet-stream` / なし）/ 100MB 超過 → `ChatworkApiError` / ネットワーク失敗 / バイト・URL 非ログ
   - `extractAttachments`: 0 / 1 / 複数件 / 同一 file_id 重複 / `[preview]` 単独（無視）/ 不正トークン（壊さない）/ 長いファイル名（スペース含む）対応
@@ -64,7 +64,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 3: slack adapter（アップロード）[code]
 
-- [ ] T006: [REQ-003] `adapters/slack/client.ts` に `uploadFile(input)` 追加
+- [x] T006: [REQ-003] `adapters/slack/client.ts` に `uploadFile(input)` 追加
   - **`file` 引数は `Buffer.from(input.bytes)` で変換**してから SDK に渡す（ASM-003 / `@slack/web-api ^7.16.0` の `file` 型は `Buffer | Stream | string` / Codex 指摘）
   - `web.files.uploadV2({ channel_id, thread_ts, filename, file: Buffer.from(bytes), ... })` を呼ぶ
   - **レスポンス抽出ヘルパ `extractSlackFileId(response)`**（入れ子形主・旧形フォールバック）を内部実装:
@@ -79,7 +79,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 3-R: slack adapter レビューゲート [orchestrator]
 
-- [ ] T006-R: Phase 3 の spec-review + spec-test
+- [x] T006-R: Phase 3 の spec-review + spec-test
   - `uploadFile`:
     - **入れ子形**（`{ files: [{ files: [{ id }] }] }`、現行 SDK 主形）→ `file.id` 抽出 ✓
     - 旧形 a（`{ files: [{ id }] }`）→ 抽出 ✓
@@ -94,7 +94,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 4: サービス・結線・ドキュメント [code]
 
-- [ ] T007: [REQ-005/006] `app/services/mirror-attachments.ts` 新規作成
+- [x] T007: [REQ-005/006] `app/services/mirror-attachments.ts` 新規作成
   - `mirrorAttachments(input, deps)` を export（design §4.4）
   - フロー: 抽出 → 既アップロード判定（mapping SELECT）→ 未アップロードのみ逐次処理（メタ取得 → サイズチェック → バイト取得 → Slack アップロード → mapping `onConflictDoNothing` 記録）
   - **例外を投げない**契約（各 file の try/catch で握る・全体外側にも try/catch）
@@ -102,14 +102,14 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
   - 構造化ログ: `op: "forward.mirror.{uploaded,too_large,failed,done}"`（識別子のみ・本文・URL・バイト非出力）
   - 依存: T001, T003, T004, T005, T006
 
-- [ ] T008: [REQ-005] `app/services/forward-message.ts` 結線
+- [x] T008: [REQ-005] `app/services/forward-message.ts` 結線
   - 既存 `forward.posted` ログの**直前**（または直後）に `mirrorAttachments` 呼び出しを追加
   - 入力: `chatworkRoomId` / `chatworkMessageId`（外部）/ `messageRowId`（FK 親 / `insertedRow.id`）/ `body` / `slackChannelId` / `slackThreadTs`
   - 二重防御の outer try/catch（`forward.mirror.unexpected` ログ。`resolveSenderName` outer try/catch と同パターン / handover 経緯）
   - 既存フロー（FK 順序 / my skip / 名前解決 / 冪等保存 / Slack 投稿 / ts UPDATE）**非破壊**
   - 依存: T007
 
-- [ ] T009: [docs] `docs/setup-guide/` 更新（REQ-008）
+- [x] T009: [docs] `docs/setup-guide/` 更新（REQ-008）
   - Slack App の bot scope に **`files:write`** を追加する手順
   - ワークスペース再インストール手順（bot token が変わる旨を明記）
   - Secret Manager の `SLACK_BOT_TOKEN` 更新手順（GCP 側）
@@ -119,7 +119,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
   - 既存セットアップマニュアル（PR #19）の章立てに合わせる
   - 該当部分のスクショ追加（assistant 自身で撮影＋マスキング / memory `screenshot-masking-workflow.md`）
 
-- [ ] T010: [docs] `chatwork-slack-bridge-overview.md` 更新
+- [x] T010: [docs] `chatwork-slack-bridge-overview.md` 更新
   - 添付処理セクションを「(A) テキスト表示のみ」→「(A) フォールバック + (B) Slack 再アップロード」に書き換え
   - `chatwork_message_attachments` テーブル説明追加
   - Slack 表示例（本文 + スレッド添付）を追記
@@ -127,7 +127,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 4-R: サービス・結線・ドキュメントレビューゲート [orchestrator]
 
-- [ ] T010-R: Phase 4 の spec-review + spec-test
+- [x] T010-R: Phase 4 の spec-review + spec-test
   - `mirrorAttachments` テスト網羅:
     - 添付なし → 何もせず正常 return
     - 全件成功 → mapping 行が件数分作成
@@ -153,7 +153,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 5: 最終品質ゲート・受け入れ確認・PR [orchestrator]
 
-- [ ] T011: Final Quality Gate
+- [x] T011: Final Quality Gate
   - `pnpm lint` / `pnpm typecheck` / `pnpm test`（カバレッジ 80%）パス
   - 受け入れ基準 8 項目（requirement.md §6）の全達成確認
   - overview / setup-guide 反映確認
@@ -163,7 +163,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
     - 100MB 超過ファイルでフォールバック（テキスト表示のみ）になること
     - 同じ webhook を 2 回手動 POST しても 2 回アップロードされないこと（mapping ユニーク制約）
 
-- [ ] T012: PR 作成
+- [x] T012: PR 作成
   - spec PR（docs ブランチ・本タスクリスト含む `.specs/attachment-mirror/` 3 点セット）
   - 実装 PR（feature ブランチ / `Closes #18` で紐付け / Conventional Commits 英語）
   - 既存 #15/#16, #20/#21 と同様に **spec PR と実装 PR を分離**

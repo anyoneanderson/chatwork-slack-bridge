@@ -6,7 +6,43 @@ import type { WebhookPayload } from "@/adapters/chatwork/webhook-schema";
 import type { SlackClient } from "@/adapters/slack/client";
 import { toSlackChannelId, toSlackTs } from "@/adapters/slack/types";
 import { type ForwardMessageDeps, forwardMessage } from "@/app/services/forward-message";
-import { chatworkMessages, chatworkRoomMembers, chatworkRooms, type RoomType } from "@/db/schema";
+import {
+  chatworkMessageAttachments,
+  chatworkMessages,
+  chatworkRoomMembers,
+  chatworkRooms,
+  type RoomType,
+} from "@/db/schema";
+
+// `mirrorAttachments` をモジュールモックで差し替える（factory.test.ts の vi.hoisted + vi.mock パターン踏襲）。
+// デフォルトでは実装本体へ委譲し、既存テストは本物の挙動（getFileDownloadUrl/uploadFile 呼び出し・
+// mapping 記録）をそのまま検証する（CON-001 非破壊）。`mirrorThrows` を真にしたテストのみ、
+// mirror が（never-throw 契約を破って）throw する状況を再現し、forwardMessage 側の outer try/catch
+// （forward-message.ts:223/242 の二重防御）が機能することを担保する。
+const { mirrorState, mirrorAttachmentsSpy } = vi.hoisted(() => {
+  const state: { throwOnce: Error | null } = { throwOnce: null };
+  return {
+    mirrorState: state,
+    mirrorAttachmentsSpy: vi.fn(),
+  };
+});
+
+vi.mock("@/app/services/mirror-attachments", async () => {
+  const actual = await vi.importActual<typeof import("@/app/services/mirror-attachments")>(
+    "@/app/services/mirror-attachments",
+  );
+  mirrorAttachmentsSpy.mockImplementation(
+    async (...args: Parameters<typeof actual.mirrorAttachments>) => {
+      if (mirrorState.throwOnce !== null) {
+        const err = mirrorState.throwOnce;
+        mirrorState.throwOnce = null;
+        throw err;
+      }
+      return actual.mirrorAttachments(...args);
+    },
+  );
+  return { ...actual, mirrorAttachments: mirrorAttachmentsSpy };
+});
 
 // DUMMY 値（実 room/channel ID・実本文・実クライアント名を含まない / CON-005）。
 const DEFAULT_GROUP = toSlackChannelId("C0DUMMYGROUP");
@@ -14,6 +50,8 @@ const DEFAULT_DM = toSlackChannelId("C0DUMMYDM");
 const MAPPED_CHANNEL = toSlackChannelId("C0DUMMYMAPPED");
 const DUMMY_TS = toSlackTs("1700000000.000100");
 const DUMMY_BODY = "dummy message body";
+// 添付トークンを 1 件含むダミー本文（attachment-mirror / #18。実ファイル名・実 ID は含まない / CON-002）。
+const DUMMY_BODY_WITH_ATTACHMENT = "dummy message body [download:111]dummy (1KB)[/download]";
 const DUMMY_SENDER_NAME = "dummy sender name";
 const DUMMY_ROOM_NAME = "dummy room name";
 
@@ -55,6 +93,11 @@ interface DbScript {
   insertReturning: Array<{ id: bigint }>;
   /** true のとき update().set().where() の Promise を reject する（ts UPDATE 失敗の再現）。 */
   updateRejects?: boolean;
+  /**
+   * `chatwork_message_attachments` SELECT（添付ミラーの既アップロード判定）が返す行。
+   * `where()` を直接 await する（limit なし）チェーン。未指定なら空配列（未アップロード）。
+   */
+  attachmentSelects?: Array<{ fileId: string }>;
 }
 
 interface CapturedDb {
@@ -105,6 +148,17 @@ function makeDbMock(script: DbScript): { db: { db: unknown }; captured: Captured
           // SELECT 対象テーブルで結果セットを切り替える（rooms / room_members）。
           // 既存テストは rooms SELECT の回数・順序を検証するため、`roomSelectCount` は
           // rooms SELECT のみカウントする（members SELECT は別カウンタ）。
+          // 添付ミラーの既アップロード判定 SELECT は `where()` を直接 await する（limit なし）。
+          // rooms / members の `where().limit()` チェーンと別形のため、テーブルで分岐する。
+          if (table === chatworkMessageAttachments) {
+            const attachmentRows = script.attachmentSelects ?? [];
+            return {
+              where(_cond: unknown) {
+                return Promise.resolve(attachmentRows);
+              },
+            };
+          }
+
           let rows: unknown[];
           if (table === chatworkRoomMembers) {
             const idx = captured.memberSelectCount;
@@ -180,6 +234,10 @@ interface MakeDepsResult {
   captured: CapturedDb;
   getRoom: ReturnType<typeof vi.fn>;
   postMessage: ReturnType<typeof vi.fn>;
+  /** 添付ミラー用（attachment-mirror / #18）。デフォルトはダミー成功を返す。 */
+  getFileDownloadUrl: ReturnType<typeof vi.fn>;
+  downloadFile: ReturnType<typeof vi.fn>;
+  uploadFile: ReturnType<typeof vi.fn>;
   logs: { level: string; payload: Record<string, unknown>; message: string }[];
 }
 
@@ -187,6 +245,9 @@ function makeDeps(opts: {
   script: DbScript;
   getRoom?: (...args: unknown[]) => Promise<ChatworkRoom>;
   postMessage?: (...args: unknown[]) => Promise<{ ts: ReturnType<typeof toSlackTs> }>;
+  getFileDownloadUrl?: (...args: unknown[]) => Promise<unknown>;
+  downloadFile?: (...args: unknown[]) => Promise<{ bytes: Uint8Array; mimeType: string | null }>;
+  uploadFile?: (...args: unknown[]) => Promise<{ slackFileId: string }>;
 }): MakeDepsResult {
   const { db, captured } = makeDbMock(opts.script);
   const logs: MakeDepsResult["logs"] = [];
@@ -199,8 +260,25 @@ function makeDeps(opts: {
   );
   const postMessage = vi.fn(opts.postMessage ?? (async () => ({ ts: DUMMY_TS })));
 
-  const chatworkClient = { getRoom } as unknown as ChatworkClient;
-  const slackClient = { postMessage } as unknown as SlackClient;
+  // 添付ミラー（mirrorAttachments）用のダミー実装。デフォルトは全件成功。
+  const getFileDownloadUrl = vi.fn(
+    opts.getFileDownloadUrl ??
+      (async (_roomId: unknown, fileId: unknown) => ({
+        fileId: String(fileId),
+        filename: "dummy-attachment.png",
+        filesize: 1024,
+        mimeType: "image/png",
+        downloadUrl: "https://chatwork-storage.example.test/dummy-url",
+      })),
+  );
+  const downloadFile = vi.fn(
+    opts.downloadFile ??
+      (async () => ({ bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]), mimeType: "image/png" })),
+  );
+  const uploadFile = vi.fn(opts.uploadFile ?? (async () => ({ slackFileId: "F0DUMMYFILE" })));
+
+  const chatworkClient = { getRoom, getFileDownloadUrl, downloadFile } as unknown as ChatworkClient;
+  const slackClient = { postMessage, uploadFile } as unknown as SlackClient;
 
   const record = (level: string) => (payload: Record<string, unknown>, message: string) => {
     logs.push({ level, payload, message });
@@ -221,7 +299,16 @@ function makeDeps(opts: {
     defaultDmChannelId: DEFAULT_DM,
   };
 
-  return { deps, captured, getRoom, postMessage, logs };
+  return {
+    deps,
+    captured,
+    getRoom,
+    postMessage,
+    getFileDownloadUrl,
+    downloadFile,
+    uploadFile,
+    logs,
+  };
 }
 
 /** ルーム行を作る（select が返す形）。 */
@@ -257,6 +344,10 @@ function serializeLogs(logs: MakeDepsResult["logs"]): string {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // mirror モックの一回限り throw フラグをリセットし、呼び出し履歴も消す（テスト間の漏れ防止）。
+  // mockClear は履歴のみ消し、vi.mock 内で設定した実装委譲は保持する（restoreAllMocks では消えない）。
+  mirrorState.throwOnce = null;
+  mirrorAttachmentsSpy.mockClear();
 });
 
 describe("forwardMessage", () => {
@@ -725,5 +816,147 @@ describe("forwardMessage", () => {
       const set = captured.updateSets[0] as { slackChannelId: unknown };
       expect(set.slackChannelId).toBe(DEFAULT_DM);
     });
+  });
+
+  describe("attachment mirror wiring (attachment-mirror / #18 / 設計 §4.5)", () => {
+    it("invokes the attachment mirror after a successful ts UPDATE when the body has attachments", async () => {
+      // Arrange: 既知 group ルーム / 新規挿入 / ts UPDATE 成功 / 添付付き本文。
+      const { deps, captured, postMessage, getFileDownloadUrl, uploadFile } = makeDeps({
+        script: {
+          roomSelects: knownRoom(),
+          insertReturning: [{ id: 61n }],
+          attachmentSelects: [],
+        },
+        postMessage: async () => ({ ts: DUMMY_TS }),
+      });
+
+      // Act
+      await forwardMessage(makeEvent({ body: DUMMY_BODY_WITH_ATTACHMENT }), deps);
+
+      // Assert: 投稿 + ts UPDATE 成功後に mirror が動き、添付メタ取得・Slack アップロード・mapping 記録が走る。
+      expect(postMessage).toHaveBeenCalledTimes(1);
+      expect(captured.updateTables).toContain(chatworkMessages);
+      expect(getFileDownloadUrl).toHaveBeenCalledTimes(1);
+      const [roomArg, fileArg] = getFileDownloadUrl.mock.calls[0] as [unknown, string];
+      expect(roomArg).toBe("2002");
+      expect(fileArg).toBe("111");
+      expect(uploadFile).toHaveBeenCalledTimes(1);
+      // mapping は FK 親（messageRowId）と file を持って insert される。
+      const mappingValues = captured.insertValues.find(
+        (v): v is { chatworkMessageId: unknown; chatworkFileId: unknown } =>
+          typeof v === "object" && v !== null && "chatworkFileId" in v,
+      );
+      expect(mappingValues).toBeDefined();
+      expect((mappingValues as { chatworkMessageId: unknown }).chatworkMessageId).toBe(61n);
+      expect((mappingValues as { chatworkFileId: unknown }).chatworkFileId).toBe("111");
+    });
+
+    it("does NOT invoke the attachment mirror when the ts UPDATE fails (design §4.5: no thread_ts)", async () => {
+      // Arrange: 投稿成功するが ts UPDATE が reject → mirror へ到達しないこと（thread 指定不能のため）。
+      const { deps, getFileDownloadUrl, uploadFile, logs } = makeDeps({
+        script: {
+          roomSelects: knownRoom(),
+          insertReturning: [{ id: 63n }],
+          updateRejects: true,
+          attachmentSelects: [],
+        },
+        postMessage: async () => ({ ts: DUMMY_TS }),
+      });
+
+      // Act: route まで例外を伝播させない。
+      await expect(
+        forwardMessage(makeEvent({ body: DUMMY_BODY_WITH_ATTACHMENT }), deps),
+      ).resolves.toBeUndefined();
+
+      // Assert: 添付ミラーは一切呼ばれない（ts_update ログで return 済み）。
+      expect(getFileDownloadUrl).not.toHaveBeenCalled();
+      expect(uploadFile).not.toHaveBeenCalled();
+      expect(logs.find((l) => l.payload.op === "forward.slack.ts_update")).toBeDefined();
+      expect(logs.find((l) => l.payload.op === "forward.posted")).toBeUndefined();
+    });
+
+    it("keeps the forward flow alive (outer try/catch) even if the attachment mirror throws unexpectedly", async () => {
+      // Arrange: mirror 内部の既アップロード判定 SELECT が reject。mirrorAttachments は内部で握る契約だが、
+      // 仮に throw しても forward-message の二重防御 outer try/catch が握ることを担保する。
+      // ここでは attachment SELECT を reject させ、mirror が内部 catch するパス（never-throw）を通す。
+      const { deps, postMessage, logs } = makeDeps({
+        script: {
+          roomSelects: knownRoom(),
+          insertReturning: [{ id: 65n }],
+        },
+        postMessage: async () => ({ ts: DUMMY_TS }),
+      });
+      // attachment SELECT を reject させる（mirror 内部の外側 catch が握る → forward は完走）。
+      const original = deps.db.db as {
+        select: (c: unknown) => { from: (t: unknown) => unknown };
+      };
+      const baseSelect = original.select.bind(original);
+      original.select = (cols: unknown) => {
+        const chain = baseSelect(cols) as { from: (t: unknown) => unknown };
+        return {
+          from(table: unknown) {
+            if (table === chatworkMessageAttachments) {
+              return { where: () => Promise.reject(new Error("attachment select failed")) };
+            }
+            return chain.from(table);
+          },
+        };
+      };
+
+      // Act: route まで例外を伝播させない。
+      await expect(
+        forwardMessage(makeEvent({ body: DUMMY_BODY_WITH_ATTACHMENT }), deps),
+      ).resolves.toBeUndefined();
+
+      // Assert: 投稿は成功し forward.posted が出る。mirror は内部で握り forward フローは生きている。
+      expect(postMessage).toHaveBeenCalledTimes(1);
+      expect(logs.find((l) => l.payload.op === "forward.posted")).toBeDefined();
+      // 本文・トークンは漏れない。
+      expect(serializeLogs(logs)).not.toContain(DUMMY_SENDER_NAME);
+    });
+
+    it("catches a thrown mirrorAttachments via the outer try/catch, logs forward.mirror.unexpected, and never rethrows", async () => {
+      // Arrange: 既知 group ルーム / 新規挿入 / ts UPDATE 成功。mirrorAttachments を module mock で
+      // 直接 throw させ、forwardMessage 側の二重防御 outer try/catch（forward-message.ts:223/242）が
+      // 実際に踏まれることを担保する（mirror 内部の catch ではなく forward 側で握る経路 / NFR-005）。
+      mirrorState.throwOnce = new Error("mirror exploded unexpectedly");
+      const { deps, captured, postMessage, logs } = makeDeps({
+        script: {
+          roomSelects: knownRoom(),
+          insertReturning: [{ id: 67n }],
+          attachmentSelects: [],
+        },
+        postMessage: async () => ({ ts: DUMMY_TS }),
+      });
+
+      // Act: mirror が throw しても route まで例外を伝播させない（reject しない）。
+      await expect(
+        forwardMessage(makeEvent({ body: DUMMY_BODY_WITH_ATTACHMENT }), deps),
+      ).resolves.toBeUndefined();
+
+      // Assert: mirror は 1 回呼ばれ（throw した）、投稿・ts UPDATE は成功済みのため forward フローは完走。
+      expect(mirrorAttachmentsSpy).toHaveBeenCalledTimes(1);
+      expect(postMessage).toHaveBeenCalledTimes(1);
+      expect(captured.updateTables).toContain(chatworkMessages);
+      // forward.posted は出る（投稿成功）。
+      expect(logs.find((l) => l.payload.op === "forward.posted")).toBeDefined();
+      // forwardMessage 側の outer catch が握ったことを示す専用ログ（識別子のみ）。
+      const unexpected = logs.find((l) => l.payload.op === "forward.mirror.unexpected");
+      expect(unexpected).toBeDefined();
+      expect(unexpected?.payload).toMatchObject({
+        op: "forward.mirror.unexpected",
+        roomId: "2002",
+        messageId: "msg-3003",
+        channelId: DEFAULT_GROUP,
+      });
+      // 本文・送信者名・トークンは漏れない（NFR-002）。
+      const serialized = serializeLogs(logs);
+      expect(serialized).not.toContain(DUMMY_BODY_WITH_ATTACHMENT);
+      expect(serialized).not.toContain(DUMMY_SENDER_NAME);
+    });
+
+    // 並行 worker による同 file の二重 Slack アップロードは本 Issue 非対応（ops-safety #5 の領域 /
+    // 設計 §3.3）。webhook 再送は forwardMessage の onConflictDoNothing で早期 return するため
+    // mirrorAttachments まで到達しない（"dedup / idempotency" の既存テストでカバー済み）。
   });
 });

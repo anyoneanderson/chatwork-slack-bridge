@@ -1,4 +1,8 @@
-import type { ChatworkMember, ChatworkRoomId } from "@/adapters/chatwork/types";
+import type {
+  ChatworkFileDownloadInfo,
+  ChatworkMember,
+  ChatworkRoomId,
+} from "@/adapters/chatwork/types";
 import { ROOM_TYPES, type RoomType } from "@/db/schema";
 
 /** Chatwork API のデフォルトベース URL。 */
@@ -66,6 +70,35 @@ export interface ChatworkClient {
    *   エラーにはトークン・レスポンス本文・氏名を含めない（操作名／ステータスのみ）
    */
   getRoomMembers(roomId: ChatworkRoomId): Promise<ChatworkMember[]>;
+  /**
+   * 添付ファイルのメタ情報と短命ダウンロード URL を取得する（REQ-001）。
+   * `GET /rooms/{room_id}/files/{file_id}?create_download_url=1` を `X-ChatWorkToken` で呼ぶ。
+   *
+   * @param roomId 対象ルーム ID
+   * @param fileId 対象ファイル ID
+   * @returns `{ fileId, filename, filesize, mimeType, downloadUrl }`
+   * @throws ChatworkApiError 認可・404・レート制限・ネットワーク失敗・不正レスポンス時。
+   *   エラーにはトークン・短命 URL・ファイル名を含めない（操作名／ステータスのみ / NFR-002）
+   */
+  getFileDownloadUrl(roomId: ChatworkRoomId, fileId: string): Promise<ChatworkFileDownloadInfo>;
+  /**
+   * 短命ダウンロード URL からファイルバイトを取得する（REQ-002）。
+   * 短命 URL は認証不要のため `X-ChatWorkToken` などのヘッダは**付けない**（ASM-001）。
+   *
+   * サイズ三段防御の 2・3 段目（NFR-006）を担う:
+   * 1. `Content-Length` ヘッダで事前判定（バイト取得前に弾く）
+   * 2. `arrayBuffer()` 取得後に実バイト長を `maxBytes` と再照合（欠落・過小申告への保険）
+   *
+   * @param downloadUrl `getFileDownloadUrl` で取得した短命 URL
+   * @param options.maxBytes 許容する最大バイト数（NFR-006 / テスト容易性のため引数で受ける）
+   * @returns `{ bytes, mimeType }`（`Content-Type` 取得不可時は mimeType=null）
+   * @throws ChatworkApiError ネットワーク失敗・非 2xx・サイズ超過時。
+   *   エラーには URL・バイトを含めない（操作名／ステータスのみ / NFR-002）
+   */
+  downloadFile(
+    downloadUrl: string,
+    options: { maxBytes: number },
+  ): Promise<{ bytes: Uint8Array; mimeType: string | null }>;
 }
 
 /** `GET /rooms/{room_id}` レスポンスのうち本フェーズで使うフィールドの型ガード入力。 */
@@ -98,6 +131,40 @@ function isKnownRoomType(type: string): type is RoomType {
  */
 function isMemberResponseShape(value: unknown): value is readonly unknown[] {
   return Array.isArray(value);
+}
+
+/**
+ * `GET /rooms/{room_id}/files/{file_id}?create_download_url=1` レスポンスのうち本フェーズで使う
+ * フィールドの型ガード。
+ *
+ * `file_id` は API 仕様上 `number | string` のどちらでも返りうるため、ここでは両方を許容し、
+ * 呼び出し側で `String(...)` 化する（既存 `getRoomMembers` の `account_id` 変換と方針統一）。
+ * `mime_type` は任意のため型ガードでは検査しない。
+ *
+ * @param value レスポンス本体
+ * @returns 必須フィールドが揃っていれば true
+ */
+function isFileResponseShape(value: unknown): value is {
+  file_id: number | string;
+  filename: string;
+  filesize: number;
+  download_url: string;
+} {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const obj = value as {
+    file_id?: unknown;
+    filename?: unknown;
+    filesize?: unknown;
+    download_url?: unknown;
+  };
+  return (
+    (typeof obj.file_id === "number" || typeof obj.file_id === "string") &&
+    typeof obj.filename === "string" &&
+    typeof obj.filesize === "number" &&
+    typeof obj.download_url === "string"
+  );
 }
 
 /**
@@ -223,6 +290,106 @@ export function createChatworkClient(deps: { apiToken: string; baseUrl?: string 
         }
       }
       return members;
+    },
+
+    async getFileDownloadUrl(
+      roomId: ChatworkRoomId,
+      fileId: string,
+    ): Promise<ChatworkFileDownloadInfo> {
+      const op = "chatwork.getFileDownloadUrl";
+      const url = `${baseUrl}/rooms/${encodeURIComponent(roomId)}/files/${encodeURIComponent(
+        fileId,
+      )}?create_download_url=1`;
+
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method: "GET",
+          headers: { "X-ChatWorkToken": deps.apiToken },
+        });
+      } catch {
+        // ネットワーク失敗。生エラーは握りつぶし、操作名のみを伝える（トークン・URL を漏らさない）。
+        throw new ChatworkApiError(op);
+      }
+
+      if (!response.ok) {
+        // 認可エラー（401/403）・404・レート制限（429）・サーバエラー等。本文は読まない／含めない。
+        throw new ChatworkApiError(op, response.status);
+      }
+
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        // 2xx だが JSON として解釈できないレスポンス。
+        throw new ChatworkApiError(op, response.status);
+      }
+
+      if (!isFileResponseShape(body)) {
+        // 不正レスポンス形状。レスポンス本文・ファイル名・URL はエラーに含めない（NFR-002）。
+        throw new ChatworkApiError(op, response.status);
+      }
+
+      // `file_id` は number/string どちらも返りうるため文字列化（getRoomMembers と統一）。
+      // `mime_type` は任意のため、文字列でなければ null に倒す。
+      const rawMimeType = (body as { mime_type?: unknown }).mime_type;
+      const mimeType = typeof rawMimeType === "string" ? rawMimeType : null;
+
+      return {
+        fileId: String(body.file_id),
+        filename: body.filename,
+        filesize: body.filesize,
+        mimeType,
+        downloadUrl: body.download_url,
+      };
+    },
+
+    async downloadFile(
+      downloadUrl: string,
+      options: { maxBytes: number },
+    ): Promise<{ bytes: Uint8Array; mimeType: string | null }> {
+      const op = "chatwork.downloadFile";
+
+      let response: Response;
+      try {
+        // 短命 URL は認証不要。ヘッダは付けない（ASM-001）。URL はエラーに含めない（NFR-002）。
+        response = await fetch(downloadUrl, { method: "GET" });
+      } catch {
+        throw new ChatworkApiError(op);
+      }
+
+      if (!response.ok) {
+        throw new ChatworkApiError(op, response.status);
+      }
+
+      // サイズ三段防御 2 段目: Content-Length での事前判定（バイト取得前に弾く / NFR-006）。
+      const contentLengthHeader = response.headers.get("content-length");
+      if (contentLengthHeader !== null) {
+        const declaredBytes = Number(contentLengthHeader);
+        if (Number.isFinite(declaredBytes) && declaredBytes > options.maxBytes) {
+          throw new ChatworkApiError(op, response.status);
+        }
+      }
+
+      let buffer: ArrayBuffer;
+      try {
+        buffer = await response.arrayBuffer();
+      } catch {
+        throw new ChatworkApiError(op, response.status);
+      }
+
+      const bytes = new Uint8Array(buffer);
+
+      // サイズ三段防御 3 段目: 実バイト長を再照合（Content-Length 欠落・過小申告への保険 / NFR-006）。
+      if (bytes.byteLength > options.maxBytes) {
+        throw new ChatworkApiError(op, response.status);
+      }
+
+      // 実体のヘッダが最も信頼できる MIME。取得できなければ null。
+      const contentType = response.headers.get("content-type");
+      const mimeType = contentType === null || contentType === "" ? null : contentType;
+
+      return { bytes, mimeType };
     },
   };
 }

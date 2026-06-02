@@ -122,3 +122,36 @@ export const chatworkRoomMembers = pgTable(
     index("chatwork_room_members_room_idx").on(table.chatworkRoomId),
   ],
 );
+
+/**
+ * Chatwork 添付ファイルと Slack 再アップロード結果のマッピング（attachment-mirror design §3.1 / REQ-007）。
+ *
+ * Slack 本文投稿成功後に Chatwork の添付実体を Slack へ再アップロードした結果を保持する。
+ * FK は `chatwork_messages.id`（内部 PK）を単一カラムで参照する（複合 unique を持つ外部 ID より
+ * 単純で CASCADE 拡張に強いため / design §3.1）。`(chatwork_message_id, chatwork_file_id)` を unique に
+ * して `onConflictDoNothing` による冪等 upsert を担保し、webhook 再送・mapping 二重 insert を防ぐ
+ * （REQ-007 / NFR-004）。`slack_channel_id` / `slack_thread_ts` は監査と将来の retry 用に重複保持する。
+ */
+export const chatworkMessageAttachments = pgTable(
+  "chatwork_message_attachments",
+  {
+    id: bigint("id", { mode: "bigint" }).generatedAlwaysAsIdentity().primaryKey(),
+    chatworkMessageId: bigint("chatwork_message_id", { mode: "bigint" })
+      .notNull()
+      .references(() => chatworkMessages.id),
+    chatworkFileId: text("chatwork_file_id").notNull(),
+    slackFileId: text("slack_file_id").notNull(),
+    slackChannelId: text("slack_channel_id").notNull(),
+    slackThreadTs: text("slack_thread_ts").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique("chatwork_message_attachments_message_file_unique").on(
+      table.chatworkMessageId,
+      table.chatworkFileId,
+    ),
+    // FK index（PostgreSQL は FK に自動で index を張らない / coding-rules [MUST]）。
+    index("chatwork_message_attachments_message_idx").on(table.chatworkMessageId),
+  ],
+);
