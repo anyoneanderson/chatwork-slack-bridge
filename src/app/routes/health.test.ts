@@ -53,6 +53,7 @@ function createTestDeps(ping: DbClient["ping"]) {
   };
   const slackClient: SlackClient = {
     postMessage: vi.fn<SlackClient["postMessage"]>(),
+    uploadFile: vi.fn<SlackClient["uploadFile"]>(),
   };
 
   return {
