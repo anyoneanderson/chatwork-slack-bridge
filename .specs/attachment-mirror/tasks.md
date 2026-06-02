@@ -30,14 +30,14 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
 
 ### Phase 2: chatwork adapter（ファイル取得）[code]
 
-- [ ] T003: [REQ-001] `adapters/chatwork/client.ts` に `getFileDownloadUrl(roomId, fileId)` 追加
+- [x] T003: [REQ-001] `adapters/chatwork/client.ts` に `getFileDownloadUrl(roomId, fileId)` 追加
   - `GET /rooms/{room_id}/files/{file_id}?create_download_url=1` を `X-ChatWorkToken` で呼ぶ
   - レスポンス検証: `file_id`（**`number | string`** で受けて `String(...)` 化 / 既存 `getRoomMembers` と統一）/ `filename` / `filesize`（number）/ `download_url`（string）必須・`mime_type` 任意
   - 戻り値型 `ChatworkFileDownloadInfo`（`fileId` / `filename` / `filesize` / `mimeType` / `downloadUrl`）を `types.ts` に追加
   - 失敗時 `ChatworkApiError`（status のみ / トークン・URL・ファイル名非含有）
   - `ChatworkClient` インターフェースに追加（既存実装 / モックの双方を更新）
 
-- [ ] T004: [REQ-002] `adapters/chatwork/client.ts` に `downloadFile(downloadUrl, { maxBytes })` 追加
+- [x] T004: [REQ-002] `adapters/chatwork/client.ts` に `downloadFile(downloadUrl, { maxBytes })` 追加
   - `fetch(downloadUrl, { method: "GET" })`（**ヘッダ無し** / ASM-001）
   - `response.arrayBuffer()` → `Uint8Array` に変換
   - `Content-Type` を `mimeType` に取り出す（無ければ null）
@@ -47,7 +47,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
   - `maxBytes` は引数で受ける（テスト容易性 / `mirrorAttachments` の DI と同期）
   - 失敗時 `ChatworkApiError`（URL・バイト非含有）
 
-- [ ] T005: [REQ-004] `adapters/chatwork/extract-attachments.ts` 新規作成
+- [x] T005: [REQ-004] `adapters/chatwork/extract-attachments.ts` 新規作成
   - 純粋関数 `extractAttachments(body: string): ChatworkAttachmentRef[]`
   - 正規表現 `/\[download:(\d+)\][\s\S]*?\[\/download\]/g`
   - 同一 file_id 重複は `Set` で除去（出現順保持）
