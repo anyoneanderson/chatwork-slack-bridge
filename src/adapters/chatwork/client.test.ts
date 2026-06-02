@@ -422,20 +422,19 @@ describe("createChatworkClient.getFileDownloadUrl", () => {
     expect((init?.headers as Record<string, string>)["X-ChatWorkToken"]).toBe(DUMMY_API_TOKEN);
   });
 
-  it.each([401, 404, 429, 500])(
-    "throws ChatworkApiError with status %i on a non-2xx response",
-    async (status) => {
-      // Arrange: 認可/未存在/レート制限/サーバエラー。本文は読まない／含まれない。
-      stubFetch(async () => new Response("error detail body", { status }));
-      const client = createChatworkClient({ apiToken: DUMMY_API_TOKEN, baseUrl: DUMMY_BASE_URL });
+  it.each([
+    401, 404, 429, 500,
+  ])("throws ChatworkApiError with status %i on a non-2xx response", async (status) => {
+    // Arrange: 認可/未存在/レート制限/サーバエラー。本文は読まない／含まれない。
+    stubFetch(async () => new Response("error detail body", { status }));
+    const client = createChatworkClient({ apiToken: DUMMY_API_TOKEN, baseUrl: DUMMY_BASE_URL });
 
-      // Act & Assert
-      await expect(client.getFileDownloadUrl(DUMMY_ROOM_ID, DUMMY_FILE_ID)).rejects.toMatchObject({
-        op: "chatwork.getFileDownloadUrl",
-        status,
-      });
-    },
-  );
+    // Act & Assert
+    await expect(client.getFileDownloadUrl(DUMMY_ROOM_ID, DUMMY_FILE_ID)).rejects.toMatchObject({
+      op: "chatwork.getFileDownloadUrl",
+      status,
+    });
+  });
 
   it("throws ChatworkApiError when the response shape is invalid (missing download_url)", async () => {
     // Arrange: 必須フィールド download_url 欠落。
@@ -650,9 +649,9 @@ describe("createChatworkClient.downloadFile", () => {
     const client = createChatworkClient({ apiToken: DUMMY_API_TOKEN, baseUrl: DUMMY_BASE_URL });
 
     // Act & Assert: 実 byteLength 段階で弾く（三段防御の核心）。
-    await expect(
-      client.downloadFile(DUMMY_DOWNLOAD_URL, { maxBytes: 10 }),
-    ).rejects.toMatchObject({ op: "chatwork.downloadFile" });
+    await expect(client.downloadFile(DUMMY_DOWNLOAD_URL, { maxBytes: 10 })).rejects.toMatchObject({
+      op: "chatwork.downloadFile",
+    });
   });
 
   it("rejects at the byteLength stage when Content-Length under-reports the real size (defense layer 3)", async () => {
@@ -663,9 +662,9 @@ describe("createChatworkClient.downloadFile", () => {
     const client = createChatworkClient({ apiToken: DUMMY_API_TOKEN, baseUrl: DUMMY_BASE_URL });
 
     // Act & Assert
-    await expect(
-      client.downloadFile(DUMMY_DOWNLOAD_URL, { maxBytes: 10 }),
-    ).rejects.toMatchObject({ op: "chatwork.downloadFile" });
+    await expect(client.downloadFile(DUMMY_DOWNLOAD_URL, { maxBytes: 10 })).rejects.toMatchObject({
+      op: "chatwork.downloadFile",
+    });
   });
 
   it("throws ChatworkApiError with status on a non-2xx response", async () => {
@@ -728,11 +727,7 @@ describe("createChatworkClient.downloadFile", () => {
     // Assert
     expect(caught).toBeInstanceOf(ChatworkApiError);
     const error = caught as ChatworkApiError;
-    const serialized = [
-      error.message,
-      error.stack ?? "",
-      JSON.stringify({ ...error }),
-    ].join(" ");
+    const serialized = [error.message, error.stack ?? "", JSON.stringify({ ...error })].join(" ");
     expect(serialized).not.toContain(DUMMY_DOWNLOAD_URL);
     expect(serialized).not.toContain(responseBody);
   });
