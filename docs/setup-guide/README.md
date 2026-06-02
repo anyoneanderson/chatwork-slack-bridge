@@ -47,11 +47,18 @@ Chatwork (Webhook) ──▶ Bridge (/chatwork/webhook) ──▶ Slack (chat.po
 
 ![Basic Information](images/04-basic-information.png)
 
-### 1-2. Bot スコープ `chat:write` を追加する
+### 1-2. Bot スコープ `chat:write` / `files:write` を追加する
 
-左メニュー **「OAuth & Permissions」** →「ボットトークンのスコープ」で **`chat:write`** を追加します。
+左メニュー **「OAuth & Permissions」** →「ボットトークンのスコープ」で以下の 2 つを追加します:
+
+- **`chat:write`** — メッセージ投稿（forwarding）に必要
+- **`files:write`** — Chatwork 添付ファイルを Slack に再アップロードする（[#18 attachment-mirror](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/18)）ために必要
 
 ![Add chat:write scope](images/05-bot-scope-chat-write.png)
+
+<!-- TODO(#18): files:write スコープ追加画面のスクショ（assistant 撮影＋マスキング） -->
+
+> **既存ワークスペースに後から `files:write` を追加する場合**は、スコープ追加後に **ワークスペースへの再インストールが必要**です（次節 1-3 / 後述の「§7 既存環境へのスコープ追加（`files:write`）」参照）。再インストールすると **Bot トークンが変わる**ため、Secret Manager の `SLACK_BOT_TOKEN` 更新と Cloud Run の再デプロイまでをワンセットで行ってください。
 
 ### 1-3. ワークスペースにインストールしてトークンを取得する
 
@@ -195,9 +202,72 @@ Webhook を設定した Chatwork ルームに**テストメッセージを 1 通
 ## 6. 既知の制限・今後の改善
 
 - **送信者表示**: 現状は送信者が account_id（数字）で表示されます。表示名解決は [#17](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/17) で対応予定。
-- **絵文字・添付・装飾**: Chatwork 独自のメッセージ記法（`(emoticon)` / `[info]` / `[download]` 等）の整形は [#17](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/17)、添付ファイルの Slack 再アップロードは [#18](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/18) で対応予定。
+- **絵文字・装飾**: Chatwork 独自のメッセージ記法（`(emoticon)` / `[info]` / `[download]` 等）の整形は [#17](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/17) で対応済み。
+- **添付ファイル**: 画像・ファイル添付は Slack 本文投稿のスレッドに**実体として再アップロード**されます（[#18 attachment-mirror](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/18)）。これには Bot スコープ `files:write` が必要です（§1-2 / §7）。取得・アップロードに失敗した場合や 1 ファイル 100MB を超える場合は、本文の `📎 ファイル名 (サイズ)` テキスト表示にフォールバックし、転送自体は継続します。
 - **複数ルーム**: 上記のとおり Chatwork はルームごとに別トークンのため、マルチルーム（トークンの DB 管理）と管理 CLI を今後のフェーズで予定。
 - **Slack → Chatwork 返信**: [#4 slack-reply](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/4) で対応予定。
+
+---
+
+## 7. 既存環境へのスコープ追加（`files:write`）
+
+添付ファイルの Slack 再アップロード（[#18 attachment-mirror](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/18)）を**すでに稼働中の Bridge に後から有効化**する場合の手順です。新規セットアップ時は §1-2 でスコープを追加済みのため、この節は不要です。
+
+> **⚠ 順序が重要**: スコープ追加 → 再インストール → Secret Manager 更新 → **Cloud Run 再デプロイ** までを 1 セットで行います。最後の再デプロイを忘れると、稼働中のリビジョンが古いトークンを使い続け、添付アップロード時に `not_authed` などの認証エラーになります（後述）。
+
+### 7-1. `files:write` スコープを追加する
+
+[https://api.slack.com/apps](https://api.slack.com/apps) で対象アプリを開き、**「OAuth & Permissions」** →「ボットトークンのスコープ」に **`files:write`** を追加します（既存の `chat:write` はそのまま残します）。
+
+<!-- TODO(#18): files:write スコープ追加画面のスクショ（assistant 撮影＋マスキング） -->
+
+### 7-2. ワークスペースに再インストールする
+
+スコープを追加すると、画面上部に **「Reinstall your app」（アプリを再インストール）** の案内が出ます。これをクリックし、権限確認画面で **「許可する」** を押します。
+
+<!-- TODO(#18): 再インストール（Reinstall）画面のスクショ（assistant 撮影＋マスキング） -->
+
+> **⚠ Bot トークンが変わります**: スコープ追加に伴う再インストールで、**Bot User OAuth Token（`xoxb-…`）が新しい値に更新されます**。再インストール後に「OAuth & Permissions」で表示される新しいトークンを控えてください。古いトークンのまま運用すると添付アップロードが失敗します。
+>
+> 既存チャンネルへの Bot 招待（§1-4）はやり直し不要です（招待状態は維持されます）。
+
+### 7-3. Secret Manager の `SLACK_BOT_TOKEN` を更新する
+
+新しい Bot トークンを Secret Manager のシークレットに **新バージョンとして追加**します（§3-1 で作成した `chatwork-slack-bridge-slack-bot-token` を想定）。
+
+```bash
+PROJECT=<your-gcp-project>
+
+# 新しい xoxb トークンを新バージョンとして追加（既存バージョンは残る）
+printf '%s' '<NEW_SLACK_BOT_TOKEN>' \
+  | gcloud secrets versions add chatwork-slack-bridge-slack-bot-token \
+      --data-file=- --project "$PROJECT"
+```
+
+> デプロイワークフローはシークレットを `:latest` で参照する想定のため、シークレット「名」（GitHub 変数 `SLACK_BOT_TOKEN_SECRET`）の変更は不要です。新バージョンを追加するだけで構いません。
+
+### 7-4. Cloud Run を再デプロイする（必須・忘れやすい）
+
+**ここが最重要ポイントです。** Secret Manager に新バージョンを追加しただけでは、**稼働中の Cloud Run リビジョンには反映されません**。
+
+- Cloud Run は **起動時（新リビジョン作成時）にシークレットを読み込み**、そのリビジョンが生きている間はその値をキャッシュし続けます。
+- したがって Secret Manager に新バージョンを足しても、**既存リビジョンは古いトークンを使い続けます**。
+- **再デプロイ（新リビジョンの作成）でのみ新トークンが読み込まれます**。
+
+そのため、`main` への push などで **必ず再デプロイ**してください（既定のデプロイ手順は §4-1）。
+
+```bash
+# 例: 何も変更がなくても新リビジョンを強制作成して新トークンを読み込ませる
+gcloud run services update <GCP_SERVICE_NAME> \
+  --project <your-gcp-project> --region <your-region> \
+  --update-labels "reload=$(date +%s)"
+```
+
+> **症状の見分け方**: スコープ追加・再インストール・Secret 更新まで済んでいるのに添付アップロードが失敗し、ログに Slack の `not_authed` / `invalid_auth` が出る場合は、**Cloud Run の再デプロイ忘れ**（古いリビジョンが旧トークンをキャッシュ）をまず疑ってください。本文の転送（`chat:write`）は古いトークンでも成功するため、「本文は届くが添付だけ来ない」状態になりがちです。
+
+### 7-5. 動作確認
+
+Webhook 設定済みの Chatwork ルームに**小さな画像（例: 数十 KB の PNG）を添付したメッセージを 1 通**投稿します。Slack の転送先チャンネルに本文が投稿され、**そのスレッドに画像の実体がアップロード**されれば成功です（§「5. 転送ルーティングの仕組み」の投稿先に従います）。
 
 ---
 
@@ -207,7 +277,7 @@ Webhook を設定した Chatwork ルームに**テストメッセージを 1 通
 |------|------|------|
 | `CHATWORK_WEBHOOK_TOKEN` | secret | Webhook 署名検証用トークン |
 | `CHATWORK_API_TOKEN` | secret | Chatwork API（ルーム/メンバー取得）用トークン |
-| `SLACK_BOT_TOKEN` | secret | Slack 投稿用 Bot トークン（`chat:write`） |
+| `SLACK_BOT_TOKEN` | secret | Slack 投稿・添付アップロード用 Bot トークン（`chat:write` / `files:write`） |
 | `SLACK_DEFAULT_GROUP_CHANNEL_ID` | config | グループ種別の集約チャンネル ID |
 | `SLACK_DEFAULT_DM_CHANNEL_ID` | config | DM 種別の集約チャンネル ID |
 

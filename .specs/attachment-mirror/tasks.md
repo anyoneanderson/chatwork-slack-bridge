@@ -109,7 +109,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
   - 既存フロー（FK 順序 / my skip / 名前解決 / 冪等保存 / Slack 投稿 / ts UPDATE）**非破壊**
   - 依存: T007
 
-- [ ] T009: [docs] `docs/setup-guide/` 更新（REQ-008）
+- [x] T009: [docs] `docs/setup-guide/` 更新（REQ-008）
   - Slack App の bot scope に **`files:write`** を追加する手順
   - ワークスペース再インストール手順（bot token が変わる旨を明記）
   - Secret Manager の `SLACK_BOT_TOKEN` 更新手順（GCP 側）
@@ -119,7 +119,7 @@ Chatwork 添付ファイルを Slack に再アップロードする機能を、f
   - 既存セットアップマニュアル（PR #19）の章立てに合わせる
   - 該当部分のスクショ追加（assistant 自身で撮影＋マスキング / memory `screenshot-masking-workflow.md`）
 
-- [ ] T010: [docs] `chatwork-slack-bridge-overview.md` 更新
+- [x] T010: [docs] `chatwork-slack-bridge-overview.md` 更新
   - 添付処理セクションを「(A) テキスト表示のみ」→「(A) フォールバック + (B) Slack 再アップロード」に書き換え
   - `chatwork_message_attachments` テーブル説明追加
   - Slack 表示例（本文 + スレッド添付）を追記
