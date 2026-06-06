@@ -73,16 +73,21 @@ export function buildConfirmBlocks(input: {
   ];
 }
 
-/** 送信結果に応じた確認メッセージ更新の種別（`chat.update` の差し替え内容を決める）。 */
-export type ResultKind = "sent" | "failed" | "cancelled" | "forbidden";
+/**
+ * 送信結果に応じた確認メッセージ更新の種別（`chat.update` の差し替え内容を決める）。
+ *
+ * いずれも「認可済みかつ状態遷移成功後」の結果表示のみ。未認可押下は共有確認メッセージを更新しない
+ * ため、`forbidden` の種別は持たない（未認可押下は識別子ログのみで握る / REQ-006/009）。
+ */
+export type ResultKind = "sent" | "failed" | "cancelled";
 
 /**
- * 送信結果に応じた更新メッセージ（✅/❌/🚫/⛔）を組み立てる（REQ-004 / REQ-006 / REQ-009）。
+ * 送信結果に応じた更新メッセージ（✅/❌/🚫）を組み立てる（REQ-004 / REQ-006）。
  *
  * ボタン押下後に確認メッセージを `chat.update` で差し替える際の本文。`blocks` は付けない
  * （ボタン除去 = text のみに差し替え）。`switch` は `never` 網羅で将来の種別追加漏れを防ぐ。
  *
- * @param kind 結果種別（`sent` / `failed` / `cancelled` / `forbidden`）
+ * @param kind 結果種別（`sent` / `failed` / `cancelled`）
  * @returns 差し替え用の `SlackMessage`（`{ text }`）
  */
 export function buildResultMessage(kind: ResultKind): SlackMessage {
@@ -93,8 +98,6 @@ export function buildResultMessage(kind: ResultKind): SlackMessage {
       return { text: "❌ 送信に失敗しました。もう一度返信して操作し直してください" };
     case "cancelled":
       return { text: "🚫 キャンセルしました" };
-    case "forbidden":
-      return { text: "⛔ この操作を行う権限がありません" };
     default: {
       // 網羅性チェック: 新しい kind を追加したらここでコンパイルエラーになる。
       const exhaustive: never = kind;

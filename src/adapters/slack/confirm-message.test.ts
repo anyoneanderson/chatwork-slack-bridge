@@ -103,7 +103,6 @@ describe("buildResultMessage", () => {
     ["sent", "✅ 送信しました"],
     ["failed", "❌ 送信に失敗しました。もう一度返信して操作し直してください"],
     ["cancelled", "🚫 キャンセルしました"],
-    ["forbidden", "⛔ この操作を行う権限がありません"],
   ] as const)("returns the expected text for kind=%s", (kind, expected) => {
     // Act
     const message = buildResultMessage(kind);
