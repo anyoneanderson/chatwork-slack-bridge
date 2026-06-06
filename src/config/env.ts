@@ -30,6 +30,10 @@ export const ConfigSchema = z
     CHATWORK_API_TOKEN: z.string().min(1),
     /** Slack 投稿用 Bot トークン。secret adapter 経由で取得する。 */
     SLACK_BOT_TOKEN: z.string().min(1),
+    /** Slack request 署名検証用シークレット。secret adapter 経由で取得する。 */
+    SLACK_SIGNING_SECRET: z.string().min(1),
+    /** カンマ区切りの Slack user ID。送信操作の allowlist。未設定=本人のみ許可。 */
+    SLACK_ALLOWED_REPLY_USER_IDS: z.string().optional(),
     /** group 種別の集約フォールバック Slack チャンネル ID（秘密ではなく設定値）。 */
     SLACK_DEFAULT_GROUP_CHANNEL_ID: z.string().min(1),
     /** direct 種別の集約フォールバック Slack チャンネル ID（秘密ではなく設定値）。 */
@@ -97,6 +101,8 @@ export function loadConfig(secrets: SecretProvider): Config {
     CHATWORK_WEBHOOK_TOKEN: secrets.get("CHATWORK_WEBHOOK_TOKEN"),
     CHATWORK_API_TOKEN: secrets.get("CHATWORK_API_TOKEN"),
     SLACK_BOT_TOKEN: secrets.get("SLACK_BOT_TOKEN"),
+    SLACK_SIGNING_SECRET: secrets.get("SLACK_SIGNING_SECRET"),
+    SLACK_ALLOWED_REPLY_USER_IDS: secrets.get("SLACK_ALLOWED_REPLY_USER_IDS"),
     SLACK_DEFAULT_GROUP_CHANNEL_ID: secrets.get("SLACK_DEFAULT_GROUP_CHANNEL_ID"),
     SLACK_DEFAULT_DM_CHANNEL_ID: secrets.get("SLACK_DEFAULT_DM_CHANNEL_ID"),
   });

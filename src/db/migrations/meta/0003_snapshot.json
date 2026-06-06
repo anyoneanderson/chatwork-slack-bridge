@@ -1,0 +1,814 @@
+{
+  "id": "57fcba3a-4c63-4b9c-94ed-e32ff903facc",
+  "prevId": "e350aeab-e77a-47b9-b227-e87c4c53dbca",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.chatwork_message_attachments": {
+      "name": "chatwork_message_attachments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "chatwork_message_attachments_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "chatwork_message_id": {
+          "name": "chatwork_message_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "chatwork_file_id": {
+          "name": "chatwork_file_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slack_file_id": {
+          "name": "slack_file_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slack_channel_id": {
+          "name": "slack_channel_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slack_thread_ts": {
+          "name": "slack_thread_ts",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "chatwork_message_attachments_message_idx": {
+          "name": "chatwork_message_attachments_message_idx",
+          "columns": [
+            {
+              "expression": "chatwork_message_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "chatwork_message_attachments_chatwork_message_id_chatwork_messages_id_fk": {
+          "name": "chatwork_message_attachments_chatwork_message_id_chatwork_messages_id_fk",
+          "tableFrom": "chatwork_message_attachments",
+          "tableTo": "chatwork_messages",
+          "columnsFrom": [
+            "chatwork_message_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "chatwork_message_attachments_message_file_unique": {
+          "name": "chatwork_message_attachments_message_file_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "chatwork_message_id",
+            "chatwork_file_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.chatwork_messages": {
+      "name": "chatwork_messages",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "chatwork_messages_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "chatwork_room_id": {
+          "name": "chatwork_room_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "chatwork_message_id": {
+          "name": "chatwork_message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "chatwork_account_id": {
+          "name": "chatwork_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sender_name": {
+          "name": "sender_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slack_channel_id": {
+          "name": "slack_channel_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "slack_ts": {
+          "name": "slack_ts",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "slack_thread_ts": {
+          "name": "slack_thread_ts",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'open'"
+        },
+        "raw_payload": {
+          "name": "raw_payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "chatwork_messages_room_sent_at_idx": {
+          "name": "chatwork_messages_room_sent_at_idx",
+          "columns": [
+            {
+              "expression": "chatwork_room_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sent_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "chatwork_messages_status_idx": {
+          "name": "chatwork_messages_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "chatwork_messages_slack_channel_ts_unique": {
+          "name": "chatwork_messages_slack_channel_ts_unique",
+          "columns": [
+            {
+              "expression": "slack_channel_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "slack_ts",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"chatwork_messages\".\"slack_channel_id\" is not null and \"chatwork_messages\".\"slack_ts\" is not null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "chatwork_messages_chatwork_room_id_chatwork_rooms_chatwork_room_id_fk": {
+          "name": "chatwork_messages_chatwork_room_id_chatwork_rooms_chatwork_room_id_fk",
+          "tableFrom": "chatwork_messages",
+          "tableTo": "chatwork_rooms",
+          "columnsFrom": [
+            "chatwork_room_id"
+          ],
+          "columnsTo": [
+            "chatwork_room_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "chatwork_messages_room_message_unique": {
+          "name": "chatwork_messages_room_message_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "chatwork_room_id",
+            "chatwork_message_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "chatwork_messages_status_check": {
+          "name": "chatwork_messages_status_check",
+          "value": "\"chatwork_messages\".\"status\" in ('open','done')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.chatwork_room_members": {
+      "name": "chatwork_room_members",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "chatwork_room_members_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "chatwork_room_id": {
+          "name": "chatwork_room_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "chatwork_account_id": {
+          "name": "chatwork_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "chatwork_room_members_room_idx": {
+          "name": "chatwork_room_members_room_idx",
+          "columns": [
+            {
+              "expression": "chatwork_room_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "chatwork_room_members_chatwork_room_id_chatwork_rooms_chatwork_room_id_fk": {
+          "name": "chatwork_room_members_chatwork_room_id_chatwork_rooms_chatwork_room_id_fk",
+          "tableFrom": "chatwork_room_members",
+          "tableTo": "chatwork_rooms",
+          "columnsFrom": [
+            "chatwork_room_id"
+          ],
+          "columnsTo": [
+            "chatwork_room_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "chatwork_room_members_room_account_unique": {
+          "name": "chatwork_room_members_room_account_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "chatwork_room_id",
+            "chatwork_account_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.chatwork_rooms": {
+      "name": "chatwork_rooms",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "chatwork_rooms_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "chatwork_room_id": {
+          "name": "chatwork_room_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "room_name": {
+          "name": "room_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "room_type": {
+          "name": "room_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slack_channel_id": {
+          "name": "slack_channel_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "chatwork_rooms_chatwork_room_id_unique": {
+          "name": "chatwork_rooms_chatwork_room_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "chatwork_room_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "chatwork_rooms_room_type_check": {
+          "name": "chatwork_rooms_room_type_check",
+          "value": "\"chatwork_rooms\".\"room_type\" in ('group','direct','my')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.delivery_attempts": {
+      "name": "delivery_attempts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "delivery_attempts_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "outbound_message_id": {
+          "name": "outbound_message_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "result": {
+          "name": "result",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "http_status": {
+          "name": "http_status",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_code": {
+          "name": "error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempted_at": {
+          "name": "attempted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "delivery_attempts_outbound_idx": {
+          "name": "delivery_attempts_outbound_idx",
+          "columns": [
+            {
+              "expression": "outbound_message_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "delivery_attempts_outbound_message_id_outbound_messages_id_fk": {
+          "name": "delivery_attempts_outbound_message_id_outbound_messages_id_fk",
+          "tableFrom": "delivery_attempts",
+          "tableTo": "outbound_messages",
+          "columnsFrom": [
+            "outbound_message_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "delivery_attempts_result_check": {
+          "name": "delivery_attempts_result_check",
+          "value": "\"delivery_attempts\".\"result\" in ('success','failure')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.outbound_messages": {
+      "name": "outbound_messages",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "outbound_messages_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "chatwork_room_id": {
+          "name": "chatwork_room_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_chatwork_message_id": {
+          "name": "source_chatwork_message_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "slack_channel_id": {
+          "name": "slack_channel_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slack_thread_ts": {
+          "name": "slack_thread_ts",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slack_reply_ts": {
+          "name": "slack_reply_ts",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slack_confirm_ts": {
+          "name": "slack_confirm_ts",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "slack_user_id": {
+          "name": "slack_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "chatwork_message_id": {
+          "name": "chatwork_message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_message": {
+          "name": "error_message",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "outbound_messages_room_idx": {
+          "name": "outbound_messages_room_idx",
+          "columns": [
+            {
+              "expression": "chatwork_room_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "outbound_messages_source_idx": {
+          "name": "outbound_messages_source_idx",
+          "columns": [
+            {
+              "expression": "source_chatwork_message_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "outbound_messages_status_idx": {
+          "name": "outbound_messages_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "outbound_messages_chatwork_room_id_chatwork_rooms_chatwork_room_id_fk": {
+          "name": "outbound_messages_chatwork_room_id_chatwork_rooms_chatwork_room_id_fk",
+          "tableFrom": "outbound_messages",
+          "tableTo": "chatwork_rooms",
+          "columnsFrom": [
+            "chatwork_room_id"
+          ],
+          "columnsTo": [
+            "chatwork_room_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "outbound_messages_source_chatwork_message_id_chatwork_messages_id_fk": {
+          "name": "outbound_messages_source_chatwork_message_id_chatwork_messages_id_fk",
+          "tableFrom": "outbound_messages",
+          "tableTo": "chatwork_messages",
+          "columnsFrom": [
+            "source_chatwork_message_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "outbound_messages_channel_reply_unique": {
+          "name": "outbound_messages_channel_reply_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "slack_channel_id",
+            "slack_reply_ts"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "outbound_messages_status_check": {
+          "name": "outbound_messages_status_check",
+          "value": "\"outbound_messages\".\"status\" in ('pending','sending','sent','cancelled','failed')"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

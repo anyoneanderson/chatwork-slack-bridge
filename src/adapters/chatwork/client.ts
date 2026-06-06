@@ -99,6 +99,21 @@ export interface ChatworkClient {
     downloadUrl: string,
     options: { maxBytes: number },
   ): Promise<{ bytes: Uint8Array; mimeType: string | null }>;
+  /**
+   * ルームへメッセージを投稿する（`POST /rooms/{room_id}/messages` / REQ-007）。
+   *
+   * `X-ChatWorkToken` ヘッダ + `application/x-www-form-urlencoded`（`body=<本文>`）で呼ぶ。
+   * レスポンス `{ message_id }` の `message_id` は `number | string` のどちらでも返りうるため
+   * `String(...)` 化して返す（既存 `getRoomMembers` / `getFileDownloadUrl` と方針統一 / ASM-003）。
+   *
+   * @param roomId 投稿先ルーム ID
+   * @param body 投稿本文（form-urlencoded の `body` フィールドにそのまま載せる）
+   * @returns 採番された Chatwork message id（`{ chatworkMessageId }`）
+   * @throws ChatworkApiError 認可（401/403）・404・レート制限（429）・サーバエラー・ネットワーク
+   *   失敗・不正レスポンス時。エラーにはトークン・本文・ルーム名を含めない（操作名／ステータス
+   *   のみ / NFR-002）
+   */
+  postMessage(roomId: ChatworkRoomId, body: string): Promise<{ chatworkMessageId: string }>;
 }
 
 /** `GET /rooms/{room_id}` レスポンスのうち本フェーズで使うフィールドの型ガード入力。 */
@@ -165,6 +180,23 @@ function isFileResponseShape(value: unknown): value is {
     typeof obj.filesize === "number" &&
     typeof obj.download_url === "string"
   );
+}
+
+/**
+ * `POST /rooms/{room_id}/messages` レスポンスのうち本フェーズで使うフィールドの型ガード。
+ *
+ * `message_id` は API 仕様上 `number | string` のどちらでも返りうるため、ここでは両方を許容し、
+ * 呼び出し側で `String(...)` 化する（既存 `isFileResponseShape` の `file_id` と方針統一）。
+ *
+ * @param value レスポンス本体
+ * @returns `message_id` を `number | string` で持てば true
+ */
+function isPostMessageResponseShape(value: unknown): value is { message_id: number | string } {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const messageId = (value as { message_id?: unknown }).message_id;
+  return typeof messageId === "number" || typeof messageId === "string";
 }
 
 /**
@@ -390,6 +422,52 @@ export function createChatworkClient(deps: { apiToken: string; baseUrl?: string 
       const mimeType = contentType === null || contentType === "" ? null : contentType;
 
       return { bytes, mimeType };
+    },
+
+    async postMessage(
+      roomId: ChatworkRoomId,
+      body: string,
+    ): Promise<{ chatworkMessageId: string }> {
+      const op = "chatwork.postMessage";
+      const url = `${baseUrl}/rooms/${encodeURIComponent(roomId)}/messages`;
+
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "X-ChatWorkToken": deps.apiToken,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          // 本文は form-urlencoded の `body` フィールドに載せる。URLSearchParams が
+          // エンコードを担うため、本文はエラー・ログには出さない（NFR-002）。
+          body: new URLSearchParams({ body }).toString(),
+        });
+      } catch {
+        // ネットワーク失敗。生エラーは握りつぶし、操作名のみを伝える（トークン・本文を漏らさない）。
+        throw new ChatworkApiError(op);
+      }
+
+      if (!response.ok) {
+        // 認可エラー（401/403）・404・レート制限（429）・サーバエラー等。本文は読まない／含めない。
+        throw new ChatworkApiError(op, response.status);
+      }
+
+      let responseBody: unknown;
+      try {
+        responseBody = await response.json();
+      } catch {
+        // 2xx だが JSON として解釈できないレスポンス。
+        throw new ChatworkApiError(op, response.status);
+      }
+
+      if (!isPostMessageResponseShape(responseBody)) {
+        // 不正レスポンス形状。レスポンス本文はエラーに含めない（NFR-002）。
+        throw new ChatworkApiError(op, response.status);
+      }
+
+      // `message_id` は number/string どちらも返りうるため文字列化（既存方針と統一）。
+      return { chatworkMessageId: String(responseBody.message_id) };
     },
   };
 }

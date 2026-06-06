@@ -33,13 +33,13 @@ export class SecretConfigError extends Error {
  *
  * backend 判定・Secret Manager 参照に必要な `SECRET_BACKEND` / `GOOGLE_CLOUD_PROJECT` /
  * `DATABASE_URL_SECRET` / `CHATWORK_WEBHOOK_TOKEN_SECRET` / `CHATWORK_API_TOKEN_SECRET` /
- * `SLACK_BOT_TOKEN_SECRET` は secret provider 構築前に必要なため、`process.env` から直接読む
- * （シークレット名・スイッチであり秘密の実値ではない）。
+ * `SLACK_BOT_TOKEN_SECRET` / `SLACK_SIGNING_SECRET_SECRET` は secret provider 構築前に必要なため、
+ * `process.env` から直接読む（シークレット名・スイッチであり秘密の実値ではない）。
  *
  * @returns 構築済みの `SecretProvider`
  * @throws SecretConfigError gcp backend で `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` /
- *   `CHATWORK_WEBHOOK_TOKEN_SECRET` / `CHATWORK_API_TOKEN_SECRET` / `SLACK_BOT_TOKEN_SECRET` が
- *   欠落している場合（キー名のみ保持）
+ *   `CHATWORK_WEBHOOK_TOKEN_SECRET` / `CHATWORK_API_TOKEN_SECRET` / `SLACK_BOT_TOKEN_SECRET` /
+ *   `SLACK_SIGNING_SECRET_SECRET` が欠落している場合（キー名のみ保持）
  * @throws SecretAccessError gcp backend で Secret Manager アクセスに失敗した場合（`createGcpSecretProvider` 由来）
  */
 export async function createSecretProvider(): Promise<SecretProvider> {
@@ -54,6 +54,7 @@ export async function createSecretProvider(): Promise<SecretProvider> {
   const chatworkWebhookTokenSecret = process.env.CHATWORK_WEBHOOK_TOKEN_SECRET;
   const chatworkApiTokenSecret = process.env.CHATWORK_API_TOKEN_SECRET;
   const slackBotTokenSecret = process.env.SLACK_BOT_TOKEN_SECRET;
+  const slackSigningSecretSecret = process.env.SLACK_SIGNING_SECRET_SECRET;
 
   // 欠落キー名のみを収集する。値（プロジェクト ID・シークレット名）はエラーに含めない。
   const missingKeys: string[] = [];
@@ -72,12 +73,16 @@ export async function createSecretProvider(): Promise<SecretProvider> {
   if (!slackBotTokenSecret) {
     missingKeys.push("SLACK_BOT_TOKEN_SECRET");
   }
+  if (!slackSigningSecretSecret) {
+    missingKeys.push("SLACK_SIGNING_SECRET_SECRET");
+  }
   if (
     !projectId ||
     !databaseUrlSecret ||
     !chatworkWebhookTokenSecret ||
     !chatworkApiTokenSecret ||
-    !slackBotTokenSecret
+    !slackBotTokenSecret ||
+    !slackSigningSecretSecret
   ) {
     throw new SecretConfigError(missingKeys);
   }
@@ -89,6 +94,7 @@ export async function createSecretProvider(): Promise<SecretProvider> {
       CHATWORK_WEBHOOK_TOKEN: chatworkWebhookTokenSecret,
       CHATWORK_API_TOKEN: chatworkApiTokenSecret,
       SLACK_BOT_TOKEN: slackBotTokenSecret,
+      SLACK_SIGNING_SECRET: slackSigningSecretSecret,
     },
   });
 }

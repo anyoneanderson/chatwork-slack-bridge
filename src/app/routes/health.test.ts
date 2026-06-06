@@ -28,6 +28,7 @@ function createTestDeps(ping: DbClient["ping"]) {
     CHATWORK_WEBHOOK_TOKEN: "dummy-chatwork-webhook-token",
     CHATWORK_API_TOKEN: "dummy-chatwork-api-token",
     SLACK_BOT_TOKEN: "xoxb-dummy-slack-bot-token",
+    SLACK_SIGNING_SECRET: "dummy-slack-signing-secret",
     SLACK_DEFAULT_GROUP_CHANNEL_ID: "C0DUMMYGROUP",
     SLACK_DEFAULT_DM_CHANNEL_ID: "C0DUMMYDM",
   };
@@ -50,9 +51,11 @@ function createTestDeps(ping: DbClient["ping"]) {
     getRoomMembers: vi.fn<ChatworkClient["getRoomMembers"]>(),
     getFileDownloadUrl: vi.fn<ChatworkClient["getFileDownloadUrl"]>(),
     downloadFile: vi.fn<ChatworkClient["downloadFile"]>(),
+    postMessage: vi.fn<ChatworkClient["postMessage"]>(),
   };
   const slackClient: SlackClient = {
     postMessage: vi.fn<SlackClient["postMessage"]>(),
+    updateMessage: vi.fn<SlackClient["updateMessage"]>(),
     uploadFile: vi.fn<SlackClient["uploadFile"]>(),
   };
 
