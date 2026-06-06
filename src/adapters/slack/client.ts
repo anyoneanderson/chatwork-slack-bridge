@@ -1,5 +1,6 @@
 import { WebClient } from "@slack/web-api";
 import type {
+  SlackBlock,
   SlackChannelId,
   SlackMessage,
   SlackTs,
@@ -48,15 +49,35 @@ export interface SlackClient {
   /**
    * 指定チャンネルにメッセージを投稿する（`chat.postMessage`）。
    *
-   * 本フェーズはトップレベル投稿のみ（スレッド化は slack-reply 以降）。
+   * 既存のトップレベル投稿（forwarding / attachment-mirror）に加え、`options.threadTs` 指定で
+   * スレッド返信、`message.blocks` 指定で Block Kit 投稿（送信確認 UI）に対応する。第 3 引数
+   * `options` は**任意**で、既存の 2 引数呼び出しと後方互換（CON-001）。`blocks` 併用時も `text`
+   * はフォールバック表示として常に送る。
    *
    * @param channelId 投稿先チャンネル ID
-   * @param message 投稿ペイロード（`format` の出力。`{ text }`）
+   * @param message 投稿ペイロード（`{ text }` ＋任意 `blocks`）
+   * @param options 任意。`threadTs` 指定でそのスレッドに返信投稿する
    * @returns 投稿された Slack メッセージの `ts`（ブランド型 `SlackTs`。実行時は文字列）
    * @throws SlackApiError API 失敗（`ok: false`）・例外送出・`ts` 欠落時。エラーには
    *   bot token・本文を含めない（操作名／チャンネル ID／Slack エラーコードのみ）
    */
-  postMessage(channelId: SlackChannelId, message: SlackMessage): Promise<{ ts: SlackTs }>;
+  postMessage(
+    channelId: SlackChannelId,
+    message: SlackMessage,
+    options?: { threadTs?: SlackTs },
+  ): Promise<{ ts: SlackTs }>;
+
+  /**
+   * 既存メッセージを更新する（`chat.update` / REQ-008）。送信確認 UI を結果表示（✅/❌/🚫/⛔）へ
+   * 差し替えるために使う。`message.blocks` を指定すればボタン除去などブロックの差し替えもできる。
+   *
+   * @param channelId 対象メッセージのチャンネル ID
+   * @param ts 更新対象メッセージの `ts`（確認メッセージの `ts`）
+   * @param message 差し替え後のペイロード（`{ text }` ＋任意 `blocks`）
+   * @throws SlackApiError API 失敗（`ok: false`）・例外送出時。エラーには bot token・本文を
+   *   含めない（操作名／チャンネル ID／Slack エラーコードのみ / NFR-002）
+   */
+  updateMessage(channelId: SlackChannelId, ts: SlackTs, message: SlackMessage): Promise<void>;
 
   /**
    * 指定スレッドにファイルをアップロードする（`files.uploadV2` / REQ-003）。
@@ -87,15 +108,20 @@ export function createSlackClient(deps: { botToken: string }): SlackClient {
   const web = new WebClient(deps.botToken);
 
   return {
-    async postMessage(channelId: SlackChannelId, message: SlackMessage): Promise<{ ts: SlackTs }> {
+    async postMessage(
+      channelId: SlackChannelId,
+      message: SlackMessage,
+      options?: { threadTs?: SlackTs },
+    ): Promise<{ ts: SlackTs }> {
       const op = "slack.postMessage";
 
       let response: Awaited<ReturnType<typeof web.chat.postMessage>>;
       try {
-        response = await web.chat.postMessage({
-          channel: channelId,
-          text: message.text,
-        });
+        response = await web.chat.postMessage(
+          // exactOptionalPropertyTypes 対応: undefined を持つキーを混ぜないよう条件付きで組み立てる。
+          // `blocks` の SDK 型（KnownBlock | Block）と内部の構造型 SlackBlock の差は境界でのみ吸収する。
+          buildChatArgs(channelId, message, options?.threadTs),
+        );
       } catch (error) {
         // SDK は API エラー（platform / rate-limit / network）で例外を送出する。
         // 生エラーには token が載らない設計だが、念のため Slack のエラーコードのみ抽出して伝える。
@@ -108,6 +134,28 @@ export function createSlackClient(deps: { botToken: string }): SlackClient {
       }
 
       return { ts: toSlackTs(response.ts) };
+    },
+
+    async updateMessage(
+      channelId: SlackChannelId,
+      ts: SlackTs,
+      message: SlackMessage,
+    ): Promise<void> {
+      const op = "slack.updateMessage";
+
+      let response: Awaited<ReturnType<typeof web.chat.update>>;
+      try {
+        response = await web.chat.update(buildChatUpdateArgs(channelId, ts, message));
+      } catch (error) {
+        // SDK は API エラー（platform / rate-limit / network）で例外を送出する。
+        // 生エラーには token が載らない設計だが、念のため Slack のエラーコードのみ抽出して伝える。
+        throw new SlackApiError(op, channelId, extractSlackErrorCode(error));
+      }
+
+      if (!response.ok) {
+        // ok: false は SDK が例外化しないケースもあるため明示的に弾く。
+        throw new SlackApiError(op, channelId, response.error);
+      }
     },
 
     async uploadFile(input: SlackUploadFileInput): Promise<{ slackFileId: string }> {
@@ -143,6 +191,73 @@ export function createSlackClient(deps: { botToken: string }): SlackClient {
       return { slackFileId };
     },
   };
+}
+
+/** `chat.postMessage` の引数型（SDK と完全に同期させる）。 */
+type ChatPostMessageArgs = Parameters<WebClient["chat"]["postMessage"]>[0];
+/** `chat.update` の引数型（SDK と完全に同期させる）。 */
+type ChatUpdateArgs = Parameters<WebClient["chat"]["update"]>[0];
+
+/**
+ * SDK の chat 引数は `ChannelAndText | ChannelAndBlocks | …` のユニオンで、特定バリアントに
+ * `blocks` を後付け代入できない。`text` と `blocks` を同時に持つ中間形をいったん構築し、SDK
+ * 境界で目的の引数型へキャストする（内部の構造型 `SlackBlock` ↔ SDK の `KnownBlock | Block`
+ * もここで吸収する / design §4.3「型安全と SDK 互換のバランス」）。
+ */
+interface ChatArgsBase {
+  channel: string;
+  text: string;
+  thread_ts?: string;
+  blocks?: SlackBlock[];
+}
+
+/**
+ * `chat.postMessage` の引数を組み立てる（`thread_ts` / `blocks` を任意で付与）。
+ *
+ * `exactOptionalPropertyTypes` 下では `undefined` を持つキーを混ぜると不要キー送出になるため、
+ * 値があるときだけキーを足す。`text` はブロック併用時のフォールバック表示として常に渡す（NFR-002
+ * で本文はログには出さないが、Slack 投稿先＝信頼境界内には載る）。
+ *
+ * @param channelId 投稿先チャンネル ID
+ * @param message 投稿ペイロード（`{ text }` ＋任意 `blocks`）
+ * @param threadTs スレッド返信先の `ts`（未指定ならトップレベル投稿）
+ * @returns SDK にそのまま渡せる `chat.postMessage` 引数
+ */
+function buildChatArgs(
+  channelId: SlackChannelId,
+  message: SlackMessage,
+  threadTs: SlackTs | undefined,
+): ChatPostMessageArgs {
+  const args: ChatArgsBase = { channel: channelId, text: message.text };
+  if (threadTs !== undefined) {
+    args.thread_ts = threadTs;
+  }
+  if (message.blocks !== undefined) {
+    args.blocks = message.blocks;
+  }
+  return args as unknown as ChatPostMessageArgs;
+}
+
+/**
+ * `chat.update` の引数を組み立てる（`blocks` を任意で付与）。
+ *
+ * `buildChatArgs` と同じく `exactOptionalPropertyTypes` 対応で値があるときだけキーを足す。
+ *
+ * @param channelId 対象チャンネル ID
+ * @param ts 更新対象メッセージの `ts`
+ * @param message 差し替え後ペイロード（`{ text }` ＋任意 `blocks`）
+ * @returns SDK にそのまま渡せる `chat.update` 引数
+ */
+function buildChatUpdateArgs(
+  channelId: SlackChannelId,
+  ts: SlackTs,
+  message: SlackMessage,
+): ChatUpdateArgs {
+  const args: ChatArgsBase & { ts: string } = { channel: channelId, ts, text: message.text };
+  if (message.blocks !== undefined) {
+    args.blocks = message.blocks;
+  }
+  return args as unknown as ChatUpdateArgs;
 }
 
 /**
