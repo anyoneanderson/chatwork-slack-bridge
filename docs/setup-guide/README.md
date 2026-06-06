@@ -56,9 +56,9 @@ Chatwork (Webhook) ──▶ Bridge (/chatwork/webhook) ──▶ Slack (chat.po
 
 ![Add chat:write scope](images/05-bot-scope-chat-write.png)
 
-<!-- TODO(#18): files:write スコープ追加画面のスクショ（assistant 撮影＋マスキング） -->
+![Add files:write scope](images/05b-bot-scope-files-write.png)
 
-> **既存ワークスペースに後から `files:write` を追加する場合**は、スコープ追加後に **ワークスペースへの再インストールが必要**です（次節 1-3 / 後述の「§7 既存環境へのスコープ追加（`files:write`）」参照）。再インストールすると **Bot トークンが変わる**ため、Secret Manager の `SLACK_BOT_TOKEN` 更新と Cloud Run の再デプロイまでをワンセットで行ってください。
+> **既存ワークスペースに後から `files:write` を追加する場合**は、スコープ追加後に **ワークスペースへの再インストールが必要**です（次節 1-3 / 後述の「§7 既存環境へのスコープ追加（`files:write`）」参照）。なお、本アプリのような **モダンな granular permission アプリでは、再インストールしても Bot トークンの値は変わりません**（スコープが同じトークンに付与されます）。その場合は Secret Manager の更新も Cloud Run の再デプロイも不要です。詳細・判定方法は §7 を参照してください。
 
 ### 1-3. ワークスペースにインストールしてトークンを取得する
 
@@ -213,25 +213,40 @@ Webhook を設定した Chatwork ルームに**テストメッセージを 1 通
 
 添付ファイルの Slack 再アップロード（[#18 attachment-mirror](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/18)）を**すでに稼働中の Bridge に後から有効化**する場合の手順です。新規セットアップ時は §1-2 でスコープを追加済みのため、この節は不要です。
 
-> **⚠ 順序が重要**: スコープ追加 → 再インストール → Secret Manager 更新 → **Cloud Run 再デプロイ** までを 1 セットで行います。最後の再デプロイを忘れると、稼働中のリビジョンが古いトークンを使い続け、添付アップロード時に `not_authed` などの認証エラーになります（後述）。
+> **まず結論**: 多くの場合（本アプリのような **モダンな granular permission アプリ**）は **7-1 → 7-2 の「スコープ追加 → 再インストール」だけで完了**します。再インストールしても **Bot トークンの値は変わらず**、同じトークンに新スコープが付与されるため、Secret Manager 更新（7-3）も Cloud Run 再デプロイ（7-4）も**不要**です。
+>
+> 例外として、**再インストールで Bot トークンの値が変わった**場合（古い classic アプリ等）のみ、7-3 → 7-4 を実施します。**変わったかどうかは 7-2 の手順で判定**できます（再インストール後トークンと Secret Manager の値を sha256 で比較）。
 
 ### 7-1. `files:write` スコープを追加する
 
 [https://api.slack.com/apps](https://api.slack.com/apps) で対象アプリを開き、**「OAuth & Permissions」** →「ボットトークンのスコープ」に **`files:write`** を追加します（既存の `chat:write` はそのまま残します）。
 
-<!-- TODO(#18): files:write スコープ追加画面のスクショ（assistant 撮影＋マスキング） -->
+![Add files:write scope](images/05b-bot-scope-files-write.png)
 
 ### 7-2. ワークスペースに再インストールする
 
 スコープを追加すると、画面上部に **「Reinstall your app」（アプリを再インストール）** の案内が出ます。これをクリックし、権限確認画面で **「許可する」** を押します。
 
-<!-- TODO(#18): 再インストール（Reinstall）画面のスクショ（assistant 撮影＋マスキング） -->
+![Reinstall consent](images/06b-reinstall-consent.png)
 
-> **⚠ Bot トークンが変わります**: スコープ追加に伴う再インストールで、**Bot User OAuth Token（`xoxb-…`）が新しい値に更新されます**。再インストール後に「OAuth & Permissions」で表示される新しいトークンを控えてください。古いトークンのまま運用すると添付アップロードが失敗します。
+既存チャンネルへの Bot 招待（§1-4）はやり直し不要です（招待状態は維持されます）。
+
+> **Bot トークンが変わったかどうかの判定**: 再インストール後、「OAuth & Permissions」の **Bot User OAuth Token（`xoxb-…`）** を確認します。granular permission アプリでは**値が変わりません**（この場合 7-3・7-4 は不要で、`files:write` は同じトークンに即時付与されます）。本当に変わっていないかは、再インストール後トークンと Secret Manager の現行値を **sha256 で比較**して確かめられます（実値を画面・ログに出さずに判定できます）:
 >
-> 既存チャンネルへの Bot 招待（§1-4）はやり直し不要です（招待状態は維持されます）。
+> ```bash
+> # Slack 画面の「Copy」でトークンをクリップボードへコピーしてから実行
+> pbpaste | tr -d '\n' | shasum -a 256
+> gcloud secrets versions access latest \
+>   --secret=chatwork-slack-bridge-slack-bot-token --project <your-gcp-project> \
+>   | tr -d '\n' | shasum -a 256
+> ```
+>
+> 2 つの sha256 が一致すれば **トークンは不変** → 7-3・7-4 はスキップして §7-5（動作確認）へ進みます。`auth.test` のレスポンスヘッダ `x-oauth-scopes` に `files:write` が含まれることも確認できます。
+> **一致しない（＝トークンが変わった）場合のみ**、続けて 7-3・7-4 を実施します。
 
-### 7-3. Secret Manager の `SLACK_BOT_TOKEN` を更新する
+### 7-3.（トークンが変わった場合のみ）Secret Manager の `SLACK_BOT_TOKEN` を更新する
+
+> 7-2 の sha256 比較で**トークンが不変だった場合、この節は不要**です（§7-5 へ）。再インストールで**トークンが変わった場合のみ**実施します。
 
 新しい Bot トークンを Secret Manager のシークレットに **新バージョンとして追加**します（§3-1 で作成した `chatwork-slack-bridge-slack-bot-token` を想定）。
 
@@ -246,9 +261,9 @@ printf '%s' '<NEW_SLACK_BOT_TOKEN>' \
 
 > デプロイワークフローはシークレットを `:latest` で参照する想定のため、シークレット「名」（GitHub 変数 `SLACK_BOT_TOKEN_SECRET`）の変更は不要です。新バージョンを追加するだけで構いません。
 
-### 7-4. Cloud Run を再デプロイする（必須・忘れやすい）
+### 7-4.（トークンが変わった場合のみ）Cloud Run を再デプロイする（忘れやすい）
 
-**ここが最重要ポイントです。** Secret Manager に新バージョンを追加しただけでは、**稼働中の Cloud Run リビジョンには反映されません**。
+> 7-3 を実施した場合のみ必要です（トークン不変なら不要）。**Secret Manager の値を更新したとき**は、**ここが最重要ポイント**になります。Secret Manager に新バージョンを追加しただけでは、**稼働中の Cloud Run リビジョンには反映されません**。
 
 - Cloud Run は **起動時（新リビジョン作成時）にシークレットを読み込み**、そのリビジョンが生きている間はその値をキャッシュし続けます。
 - したがって Secret Manager に新バージョンを足しても、**既存リビジョンは古いトークンを使い続けます**。
