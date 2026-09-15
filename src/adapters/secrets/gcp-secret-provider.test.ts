@@ -20,11 +20,13 @@ const DATABASE_URL_SECRET = "example-database-url-secret";
 const CHATWORK_WEBHOOK_TOKEN_SECRET = "example-chatwork-webhook-token-secret";
 const CHATWORK_API_TOKEN_SECRET = "example-chatwork-api-token-secret";
 const SLACK_BOT_TOKEN_SECRET = "example-slack-bot-token-secret";
+const SLACK_SIGNING_SECRET_SECRET = "example-slack-signing-secret-secret";
 const DATABASE_URL_VALUE = "postgres://bridge_user:bridge_pass@db.example.com:5432/bridge";
 // DUMMY token values（実トークンではない / CON-005）。
 const CHATWORK_WEBHOOK_TOKEN_VALUE = "dummy-chatwork-webhook-token";
 const CHATWORK_API_TOKEN_VALUE = "dummy-chatwork-api-token";
 const SLACK_BOT_TOKEN_VALUE = "xoxb-dummy-slack-bot-token";
+const SLACK_SIGNING_SECRET_VALUE = "dummy-slack-signing-secret";
 
 // Secret Manager で prefetch する秘密キーと、それに対応するシークレット名・期待値。
 // 注: createGcpSecretProvider は SECRET_MANAGER_KEYS の順序でアクセスする。
@@ -33,6 +35,7 @@ const SECRET_NAMES = {
   CHATWORK_WEBHOOK_TOKEN: CHATWORK_WEBHOOK_TOKEN_SECRET,
   CHATWORK_API_TOKEN: CHATWORK_API_TOKEN_SECRET,
   SLACK_BOT_TOKEN: SLACK_BOT_TOKEN_SECRET,
+  SLACK_SIGNING_SECRET: SLACK_SIGNING_SECRET_SECRET,
 } as const;
 
 const SECRET_VALUES = {
@@ -40,6 +43,7 @@ const SECRET_VALUES = {
   CHATWORK_WEBHOOK_TOKEN: CHATWORK_WEBHOOK_TOKEN_VALUE,
   CHATWORK_API_TOKEN: CHATWORK_API_TOKEN_VALUE,
   SLACK_BOT_TOKEN: SLACK_BOT_TOKEN_VALUE,
+  SLACK_SIGNING_SECRET: SLACK_SIGNING_SECRET_VALUE,
 } as const;
 
 type PrefetchedKey = keyof typeof SECRET_NAMES;
@@ -95,8 +99,8 @@ describe("createGcpSecretProvider", () => {
     const provider = await createGcpSecretProvider(buildOptions());
 
     expect(provider.get("DATABASE_URL")).toBe(DATABASE_URL_VALUE);
-    // DATABASE_URL に加え forwarding フェーズのトークン 3 種を prefetch する（計 4 回）。
-    expect(accessSecretVersionMock).toHaveBeenCalledTimes(4);
+    // DATABASE_URL + forwarding トークン 3 種 + slack-reply の signing secret を prefetch（計 5 回）。
+    expect(accessSecretVersionMock).toHaveBeenCalledTimes(5);
     expect(accessSecretVersionMock).toHaveBeenCalledWith({
       name: `projects/${PROJECT_ID}/secrets/${DATABASE_URL_SECRET}/versions/latest`,
     });
@@ -121,6 +125,11 @@ describe("createGcpSecretProvider", () => {
     });
     expect(accessSecretVersionMock).toHaveBeenCalledWith({
       name: `projects/${PROJECT_ID}/secrets/${SLACK_BOT_TOKEN_SECRET}/versions/latest`,
+    });
+    // slack-reply フェーズの signing secret も prefetch + キャッシュされる（DUMMY 値 / CON-003）。
+    expect(provider.get("SLACK_SIGNING_SECRET")).toBe(SLACK_SIGNING_SECRET_VALUE);
+    expect(accessSecretVersionMock).toHaveBeenCalledWith({
+      name: `projects/${PROJECT_ID}/secrets/${SLACK_SIGNING_SECRET_SECRET}/versions/latest`,
     });
   });
 
@@ -211,8 +220,8 @@ describe("createGcpSecretProvider", () => {
     const provider = await createGcpSecretProvider(buildOptions());
 
     expect(provider.get("DATABASE_URL")).toBe(DATABASE_URL_VALUE);
-    // 4 キー prefetch + DATABASE_URL の 1 回リトライ = 5 回。
-    expect(accessSecretVersionMock).toHaveBeenCalledTimes(5);
+    // 5 キー prefetch + DATABASE_URL の 1 回リトライ = 6 回。
+    expect(accessSecretVersionMock).toHaveBeenCalledTimes(6);
   });
 
   it("wraps a persistent SDK failure in SecretAccessError without leaking the secret name", async () => {

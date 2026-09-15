@@ -1,5 +1,6 @@
 import { chatworkMessageUrl } from "@/adapters/chatwork/message-link";
 import { renderChatworkBody } from "@/adapters/chatwork/render-body";
+import { escapeSlackText } from "@/adapters/slack/escape";
 import type { SlackMessage } from "@/adapters/slack/types";
 
 /**
@@ -36,22 +37,6 @@ const UNKNOWN_SENDER_LABEL = "unknown";
 
 /** Chatwork メッセージへのディープリンクに付けるラベル（固定文字列）。 */
 const CHATWORK_LINK_LABEL = "Chatworkで開く";
-
-/**
- * Slack のテキストに載せる前に、信頼できない外部テキストの制御文字をエスケープする。
- *
- * Chatwork メッセージ本文・ルーム名・送信者は外部（任意ユーザー）由来のため、`<!channel>` /
- * `<!here>` / `<!everyone>` / `<@U…>` 等の Slack 制御シーケンスがそのまま投稿先チャンネルで
- * 一斉メンション（broadcast）やメンションとして解釈されるのを防ぐ（通知インジェクション対策）。
- * Slack 推奨どおり `&` → `<` → `>` の順で置換する（`&` を最初に処理しないと、後続置換で生じた
- * `&amp;` 等の `&` を多重エスケープしてしまうため）。
- *
- * @param value エスケープ対象の信頼できないテキスト
- * @returns Slack 制御シーケンスを無効化したテキスト
- */
-function escapeSlackText(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
 
 /**
  * `escapeSlackText` 後の本文について、**各行の行頭**にある `&gt; ` を `> ` に戻す。

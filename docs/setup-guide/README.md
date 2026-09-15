@@ -19,9 +19,12 @@ Chatwork (Webhook) ──▶ Bridge (/chatwork/webhook) ──▶ Slack (chat.po
 | 区分 | 用意するもの | 用途 | 最終的な置き場所 |
 |------|------|------|------|
 | Slack | Bot トークン（`xoxb-…`） | Slack 投稿 | Secret Manager |
+| Slack | Signing Secret | Slack request の署名検証（slack-reply / §8） | Secret Manager |
 | Slack | 集約チャンネル 2 つの ID | 未紐付けルームの転送先 | GitHub 変数（非秘密） |
 | Chatwork | API トークン | ルーム名・種別・メンバー取得 | Secret Manager |
 | Chatwork | Webhook 署名トークン | Webhook の署名検証 | Secret Manager |
+
+> **双方向化（Slack → Chatwork 返信）を使う場合**は、上記に加えて Slack の **Signing Secret** の登録と、Event Subscriptions / Interactivity / 追加スコープの設定が必要です。手順は [§8 Slack → Chatwork 返信（slack-reply / #4）](#8-slack--chatwork-返信slack-reply-4) を参照してください。
 
 > **前提**: Bridge 本体（foundation / cloud-deploy / forwarding）はデプロイ済みで、公開 URL（例 `https://<your-domain>/chatwork/webhook`）に到達できること。デプロイ手順は [`../deploy/cloud-run.md`](../deploy/cloud-run.md) / [`../deploy/docker.md`](../deploy/docker.md) を参照。
 
@@ -138,6 +141,13 @@ create_secret chatwork-slack-bridge-chatwork-api-token     '<CHATWORK_API_TOKEN>
 create_secret chatwork-slack-bridge-slack-bot-token        '<SLACK_BOT_TOKEN>'
 ```
 
+> **slack-reply（双方向化）を使う場合**は、Slack の Signing Secret も登録します（取得手順は §8-1）。
+> `SLACK_SIGNING_SECRET` は **必須キー**で、未登録のまま `SECRET_BACKEND=gcp` でデプロイすると本番起動が失敗します（詳細は §8）。
+>
+> ```bash
+> create_secret chatwork-slack-bridge-slack-signing-secret '<SLACK_SIGNING_SECRET>'
+> ```
+
 ### 3-2. GitHub repository variables を登録する
 
 デプロイワークフロー（`.github/workflows/deploy-cloud-run.yml`）は `vars.*` を参照します。3 つのトークンは **Secret Manager のシークレット名**、2 つのチャンネル ID は **値そのもの**を入れます。
@@ -151,7 +161,14 @@ gh variable set SLACK_DEFAULT_GROUP_CHANNEL_ID --repo "$REPO" --body "<group cha
 gh variable set SLACK_DEFAULT_DM_CHANNEL_ID     --repo "$REPO" --body "<dm channel id>"      # 例: C0YYYYYYY
 ```
 
-> ローカル（`SECRET_BACKEND=env`）で動かす場合は、これらを `.env` に直接設定します（`.env.example` 参照）。`.env` はコミットしないこと。
+> **slack-reply（双方向化）を使う場合**は、Signing Secret のシークレット「名」を GitHub variable `SLACK_SIGNING_SECRET_SECRET` に設定します（既存 `SLACK_BOT_TOKEN_SECRET` と同じ間接参照の仕組み）。
+> このキーは **必須**で、**GitHub variable が未作成だとデプロイ時に空文字へ展開され、本番 Cloud Run の起動が失敗します**（詳細は §8-2）。
+>
+> ```bash
+> gh variable set SLACK_SIGNING_SECRET_SECRET --repo "$REPO" --body "chatwork-slack-bridge-slack-signing-secret"
+> ```
+
+> ローカル（`SECRET_BACKEND=env`）で動かす場合は、これらを `.env` に直接設定します（`.env.example` 参照）。`.env` はコミットしないこと。slack-reply を使う場合は `SLACK_SIGNING_SECRET=`（必須）と、任意で `SLACK_ALLOWED_REPLY_USER_IDS=`（送信 allowlist）も設定します。
 
 ---
 
@@ -205,7 +222,7 @@ Webhook を設定した Chatwork ルームに**テストメッセージを 1 通
 - **絵文字・装飾**: Chatwork 独自のメッセージ記法（`(emoticon)` / `[info]` / `[download]` 等）の整形は [#17](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/17) で対応済み。
 - **添付ファイル**: 画像・ファイル添付は Slack 本文投稿のスレッドに**実体として再アップロード**されます（[#18 attachment-mirror](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/18)）。これには Bot スコープ `files:write` が必要です（§1-2 / §7）。取得・アップロードに失敗した場合や 1 ファイル 100MB を超える場合は、本文の `📎 ファイル名 (サイズ)` テキスト表示にフォールバックし、転送自体は継続します。
 - **複数ルーム**: 上記のとおり Chatwork はルームごとに別トークンのため、マルチルーム（トークンの DB 管理）と管理 CLI を今後のフェーズで予定。
-- **Slack → Chatwork 返信**: [#4 slack-reply](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/4) で対応予定。
+- **Slack → Chatwork 返信**: 転送メッセージの Slack スレッドへ返信 → 確認ボタンで Chatwork へ投稿できます（[#4 slack-reply](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/4)）。有効化手順は [§8](#8-slack--chatwork-返信slack-reply-4) を参照。
 
 ---
 
@@ -286,14 +303,84 @@ Webhook 設定済みの Chatwork ルームに**小さな画像（例: 数十 KB 
 
 ---
 
+## 8. Slack → Chatwork 返信（slack-reply / #4）
+
+ここまでの設定（forwarding）は **Chatwork → Slack の片方向**転送です。**転送メッセージの Slack スレッドへ返信 → 確認ボタンで Chatwork へ投稿**する双方向化（[#4 slack-reply](https://github.com/anyoneanderson/chatwork-slack-bridge/issues/4)）を有効にするには、以下を設定します。
+
+```
+[Chatwork] サンプルルーム            ← forwarding が投稿した親メッセージ（slack_ts を保持）
+山田太郎:
+お世話になっております。ご確認お願いします。
+ └ （担当者がこのスレッドに返信）了解しました、明日までに対応します
+ └ 🤖 この内容を Chatwork に送信しますか？      ← bridge が確認メッセージを投稿
+      > 了解しました、明日までに対応します
+      [ 送信 ]  [ キャンセル ]
+   → [送信] 押下 → Chatwork へ投稿 → 確認メッセージを「✅ 送信しました」に更新
+```
+
+> **誤爆防止**: スレッド返信は即時送信されず、必ず［送信］/［キャンセル］の確認を 1 段挟みます。［送信］/［キャンセル］を押せるのは原則 **返信を書いた本人**だけです（共有スレッドでの他人操作を防ぐ）。
+
+### 8-1. Signing Secret を取得する
+
+Slack request の署名検証に **Signing Secret**（`SLACK_SIGNING_SECRET`）を使います。これは Bot トークンとは別物で、[https://api.slack.com/apps](https://api.slack.com/apps) で対象アプリを開き、**「Basic Information」** → **「App Credentials」** → **「Signing Secret」** の「Show」で表示・コピーできます。
+
+> **Signing Secret は再インストールでは変わりません**（App の固定値）。スコープ追加・再インストール（§8-4）で Bot トークンや Signing Secret が変わることはありません（granular permission アプリ。§7 と同じ性質）。第三者に開示しないこと。
+
+### 8-2. Signing Secret を登録する（Secret Manager / GitHub variable）
+
+forwarding と同じ間接参照の仕組みです。**秘密の実体は Secret Manager**、**GitHub variable にはシークレット「名」**を入れます（実値は GitHub に置かない）。手順は §3 と同形です（§3-1 / §3-2 の slack-reply 用ブロックに記載のコマンドを参照）。
+
+- Secret Manager に `SLACK_SIGNING_SECRET` を登録（例: `chatwork-slack-bridge-slack-signing-secret`）。Cloud Run ランタイム SA に `secretAccessor` を付与（§3-1 の `create_secret` 関数で自動付与）。
+- そのシークレット名を GitHub variable `SLACK_SIGNING_SECRET_SECRET` に設定。
+
+> ⚠ **`SLACK_SIGNING_SECRET` は必須キー**です。`SECRET_BACKEND=gcp`（本番 / Cloud Run）の起動時に gcp secret factory が `SLACK_SIGNING_SECRET_SECRET`（GitHub variable）を必須チェックします。**GitHub variable が未作成だとデプロイで空文字に展開され、本番起動が失敗します**（`SecretConfigError`）。Secret Manager 登録・GitHub variable 作成・デプロイ（再リビジョン作成）まで**ワンセット**で行ってください。
+>
+> ローカル（`SECRET_BACKEND=env`）では `.env` に `SLACK_SIGNING_SECRET=` を直接設定します。
+
+### 8-3. Event Subscriptions / Interactivity の Request URL を設定する
+
+対象アプリの左メニューで以下を設定します（`<your-domain>` はデプロイ済み Bridge の公開ホスト）。
+
+- **「Event Subscriptions」** を有効化 → **Request URL** に `https://<your-domain>/slack/events` を入力。「Verified」になることを確認します（Bridge が `url_verification` の challenge に応答します）。
+  - **「Subscribe to bot events」** に、転送先チャンネルの種別に応じて購読を追加します:
+    - public チャンネルへ転送している場合: `message.channels`
+    - private チャンネルへ転送している場合: `message.groups`
+- **「Interactivity & Shortcuts」** を有効化 → **Request URL** に `https://<your-domain>/slack/interactions` を入力（［送信］/［キャンセル］ボタン押下の受け口）。
+
+### 8-4. Bot スコープを追加して再インストールする
+
+スレッド返信の本文を Events で受け取るため、既存の `chat:write` に加えて以下を **「OAuth & Permissions」→「ボットトークンのスコープ」** に追加します:
+
+- **`channels:history`** — public チャンネルのメッセージ取得（`message.channels` を受け取るため）
+- **`groups:history`** — private チャンネルのメッセージ取得（`message.groups` を受け取るため）
+
+追加後、画面上部の **「Reinstall your app」** で再インストールし、権限確認で「許可する」を押します。
+
+> **granular permission アプリのため、再インストールしても Bot トークン・Signing Secret の値は変わりません**（同じトークンに新スコープが付与されます。§7 の `files:write` 追加と同じ性質）。そのため Secret Manager の更新も Cloud Run の再デプロイも**不要**です（万一トークンが変わった古い classic アプリの場合のみ §7-3 / §7-4 の手順を実施）。Signing Secret も §8-1 のとおり再インストールで不変です。
+
+### 8-5.（任意）送信操作を allowlist で絞る
+
+`SLACK_ALLOWED_REPLY_USER_IDS`（カンマ区切りの Slack user ID。**任意 / 既定は空**）を設定すると、本人に加えて allowlist のユーザー（管理者・代理操作）も送信/キャンセルを操作できます。**未設定の場合は「返信を書いた本人のみ」**が操作できます（後方互換）。このキーは任意のため、未設定でも起動・動作します。
+
+- ローカル: `.env` の `SLACK_ALLOWED_REPLY_USER_IDS=`
+- 本番: GitHub variable `SLACK_ALLOWED_REPLY_USER_IDS` に設定します（`SLACK_DEFAULT_*_CHANNEL_ID` と同じ非秘密の設定値）。deploy workflow がこの variable を `--set-env-vars` で Cloud Run に渡すよう配線済みです。任意のため、未設定（空文字）の場合は本人のみ許可で安全に動作します。
+
+### 8-6. 動作確認
+
+forwarding が投稿した Slack メッセージの**スレッドに返信**します。Bridge が「🤖 この内容を Chatwork に送信しますか？」と［送信］/［キャンセル］ボタン付きの確認メッセージを同スレッドに投稿します。［送信］を押すと対象 Chatwork ルームへ投稿され、確認メッセージが「✅ 送信しました」に更新されれば成功です。
+
+---
+
 ## 設定値リファレンス
 
 | キー | 種別 | 説明 |
 |------|------|------|
 | `CHATWORK_WEBHOOK_TOKEN` | secret | Webhook 署名検証用トークン |
 | `CHATWORK_API_TOKEN` | secret | Chatwork API（ルーム/メンバー取得）用トークン |
-| `SLACK_BOT_TOKEN` | secret | Slack 投稿・添付アップロード用 Bot トークン（`chat:write` / `files:write`） |
+| `SLACK_BOT_TOKEN` | secret | Slack 投稿・添付アップロード用 Bot トークン（`chat:write` / `files:write` / `channels:history` / `groups:history`） |
+| `SLACK_SIGNING_SECRET` | secret | Slack request 署名検証用シークレット（slack-reply。**必須**。§8） |
+| `SLACK_ALLOWED_REPLY_USER_IDS` | config | 送信操作の allowlist（任意・カンマ区切り。未設定＝本人のみ。§8-5） |
 | `SLACK_DEFAULT_GROUP_CHANNEL_ID` | config | グループ種別の集約チャンネル ID |
 | `SLACK_DEFAULT_DM_CHANNEL_ID` | config | DM 種別の集約チャンネル ID |
 
-gcp バックエンドでは、上記 secret は GitHub 変数 `*_SECRET`（Secret Manager のシークレット名）経由で実行時に取得されます。
+gcp バックエンドでは、上記 secret は GitHub 変数 `*_SECRET`（Secret Manager のシークレット名）経由で実行時に取得されます。`SLACK_SIGNING_SECRET` の GitHub 変数は `SLACK_SIGNING_SECRET_SECRET` です（未作成だと本番起動が失敗します。§8-2）。

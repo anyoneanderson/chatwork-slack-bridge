@@ -120,7 +120,8 @@ forwarding（#3）により Chatwork のメッセージは Slack のチャンネ
   2. `application/x-www-form-urlencoded` の `payload` フィールドを取り出し、`JSON.parse` → Zod 検証。不正は本文を出さずログし `200`。
   3. `action_id` で分岐（`cw_send` / `cw_cancel`。未知の action は no-op `200`）。
   4. `value` の `outbound_messages.id` で対象行を取得。
-- **認可（誤操作・他人操作防止）**: `cw_send` / `cw_cancel` を押せるのは、原則 **その確認メッセージに対応する返信を書いた本人**（`outbound_messages.slack_user_id` と押下ユーザーが一致）とする。加えて `SLACK_ALLOWED_REPLY_USER_IDS`（REQ-009）が設定されている場合は **allowlist のユーザーも許可**（管理者例外）。いずれにも該当しない押下は Chatwork へ送らず、確認メッセージを「⛔ この操作を行う権限がありません」に更新する。
+- **認可（誤操作・他人操作防止）**: `cw_send` / `cw_cancel` を押せるのは、原則 **その確認メッセージに対応する返信を書いた本人**（`outbound_messages.slack_user_id` と押下ユーザーが一致）とする。加えて `SLACK_ALLOWED_REPLY_USER_IDS`（REQ-009）が設定されている場合は **allowlist のユーザーも許可**（管理者例外）。いずれにも該当しない押下は Chatwork へ送らず、**共有確認メッセージは変更せず no-op（識別子のみログ）**とする。
+  - **共有メッセージを上書きしない理由（セキュリティ / Codex 指摘反映）**: 確認メッセージはスレッド内の共有メッセージであり、未認可押下で `chat.update` すると、同じスレッドを見られる別ユーザーが他人の pending 確認 UI を破壊したり、送信済 / キャンセル済の結果表示を上書きできてしまう（DoS・監査表示破壊・状態競合）。よって未認可押下は共有メッセージに副作用を与えない。押下者本人へのフィードバック（「権限がありません」）が必要なら、将来 `response_url` / ephemeral による**本人だけに見える通知**で行う（本 Issue では YAGNI）。
 - **［送信］（`cw_send`）**:
   - **状態遷移ガード（claim）**: `UPDATE outbound_messages SET status='sending' ... WHERE id=? AND status='pending' RETURNING` 相当で **`pending` のときのみ 1 行を `sending` に claim** する。0 行なら既に sending / sent / cancelled / failed とみなし二重送信しない（ボタン連打・Slack 再送対策 / NFR-004）。
   - claim 成功時のみ `chatworkClient.postMessage(roomId, body)` を呼ぶ（REQ-007）。
@@ -151,7 +152,7 @@ forwarding（#3）により Chatwork のメッセージは Slack のチャンネ
 
 - 環境変数 `SLACK_ALLOWED_REPLY_USER_IDS`（カンマ区切りの Slack user ID。**任意 / 既定は空**）を追加する。
 - **既定の認可**（allowlist 未設定でも有効）: ボタンを押せるのは確認対象の返信を書いた本人（`outbound_messages.slack_user_id` と一致）（REQ-006）。これにより、同じスレッドを見られる別ユーザーが他人の確認メッセージを送信 / キャンセルすることを防ぐ。
-- allowlist が設定されている場合は、**本人に加えて allowlist のユーザーも許可**（管理者・代理操作の例外）。どちらにも該当しない押下は Chatwork へ送らず、確認メッセージを「⛔ この操作を行う権限がありません」に更新する（coding-rules `[SHOULD]` 送信操作の allowlist）。
+- allowlist が設定されている場合は、**本人に加えて allowlist のユーザーも許可**（管理者・代理操作の例外）。どちらにも該当しない押下は Chatwork へ送らず、**共有確認メッセージは変更せず no-op（識別子のみログ）**とする（共有メッセージ上書きによる他人 UI 破壊を防ぐため / REQ-006 の理由参照 / coding-rules `[SHOULD]` 送信操作の allowlist）。
 - **本キーは任意（optional）**であり、未設定でも起動・動作する（`SLACK_SIGNING_SECRET` のような必須キー追加とは異なり、Cloud Run 起動を壊さない / メモリ required-config-keys-break-cloud-run 参照）。
 - ユーザーストーリー: 運用者として、Chatwork へ送れる Slack ユーザーを必要に応じて絞りたい。
 

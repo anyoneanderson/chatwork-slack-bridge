@@ -17,6 +17,7 @@ const ENV_KEYS = [
   "CHATWORK_WEBHOOK_TOKEN_SECRET",
   "CHATWORK_API_TOKEN_SECRET",
   "SLACK_BOT_TOKEN_SECRET",
+  "SLACK_SIGNING_SECRET_SECRET",
 ] as const;
 const originalEnv = new Map<string, string | undefined>(
   ENV_KEYS.map((key) => [key, process.env[key]]),
@@ -30,6 +31,7 @@ const GCP_SECRET_NAME_ENV = {
   CHATWORK_WEBHOOK_TOKEN_SECRET: "example-chatwork-webhook-token-secret",
   CHATWORK_API_TOKEN_SECRET: "example-chatwork-api-token-secret",
   SLACK_BOT_TOKEN_SECRET: "example-slack-bot-token-secret",
+  SLACK_SIGNING_SECRET_SECRET: "example-slack-signing-secret-secret",
 } as const;
 
 /** gcp backend で必須の参照キーを全て process.env に設定する。 */
@@ -92,6 +94,7 @@ describe("createSecretProvider", () => {
         "CHATWORK_WEBHOOK_TOKEN_SECRET",
         "CHATWORK_API_TOKEN_SECRET",
         "SLACK_BOT_TOKEN_SECRET",
+        "SLACK_SIGNING_SECRET_SECRET",
       ]);
     }
     expect(createGcpSecretProviderMock).not.toHaveBeenCalled();
@@ -116,6 +119,7 @@ describe("createSecretProvider", () => {
     "CHATWORK_WEBHOOK_TOKEN_SECRET",
     "CHATWORK_API_TOKEN_SECRET",
     "SLACK_BOT_TOKEN_SECRET",
+    "SLACK_SIGNING_SECRET_SECRET",
   ] as const)("throws SecretConfigError naming only %s when it is the sole missing forwarding secret key", async (missingKey) => {
     setAllGcpReferenceEnv();
     delete process.env[missingKey];
@@ -144,6 +148,7 @@ describe("createSecretProvider", () => {
       expect(configError.message).toContain("DATABASE_URL_SECRET");
       expect(configError.message).toContain("CHATWORK_WEBHOOK_TOKEN_SECRET");
       expect(configError.message).toContain("SLACK_BOT_TOKEN_SECRET");
+      expect(configError.message).toContain("SLACK_SIGNING_SECRET_SECRET");
       // どのシークレット名の実値も含めない。
       for (const value of Object.values(GCP_SECRET_NAME_ENV)) {
         expect(configError.message).not.toContain(value);
@@ -166,6 +171,7 @@ describe("createSecretProvider", () => {
         CHATWORK_WEBHOOK_TOKEN: "example-chatwork-webhook-token-secret",
         CHATWORK_API_TOKEN: "example-chatwork-api-token-secret",
         SLACK_BOT_TOKEN: "example-slack-bot-token-secret",
+        SLACK_SIGNING_SECRET: "example-slack-signing-secret-secret",
       },
     });
   });

@@ -732,3 +732,147 @@ describe("createChatworkClient.downloadFile", () => {
     expect(serialized).not.toContain(responseBody);
   });
 });
+
+describe("createChatworkClient.postMessage", () => {
+  // DUMMY 値（実本文・実 message_id を含まない / CON-003）。
+  const DUMMY_BODY = "dummy reply body 了解しました";
+  const DUMMY_MESSAGE_ID = "98765";
+
+  it("maps a successful response { message_id: string } to { chatworkMessageId }", async () => {
+    // Arrange
+    stubFetch(async () => jsonResponse({ message_id: DUMMY_MESSAGE_ID }));
+    const client = createChatworkClient({ apiToken: DUMMY_API_TOKEN, baseUrl: DUMMY_BASE_URL });
+
+    // Act
+    const result = await client.postMessage(DUMMY_ROOM_ID, DUMMY_BODY);
+
+    // Assert
+    expect(result).toEqual({ chatworkMessageId: DUMMY_MESSAGE_ID });
+  });
+
+  it("accepts message_id as a number and stringifies it", async () => {
+    // Arrange: API は message_id を number で返すこともある（既存 file_id / account_id と統一方針）。
+    stubFetch(async () => jsonResponse({ message_id: 98765 }));
+    const client = createChatworkClient({ apiToken: DUMMY_API_TOKEN, baseUrl: DUMMY_BASE_URL });
+
+    // Act
+    const result = await client.postMessage(DUMMY_ROOM_ID, DUMMY_BODY);
+
+    // Assert
+    expect(result).toEqual({ chatworkMessageId: "98765" });
+  });
+
+  it("POSTs to /rooms/{id}/messages with X-ChatWorkToken, form content-type and urlencoded body", async () => {
+    // Arrange
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ message_id: DUMMY_MESSAGE_ID }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createChatworkClient({ apiToken: DUMMY_API_TOKEN, baseUrl: DUMMY_BASE_URL });
+
+    // Act
+    await client.postMessage(DUMMY_ROOM_ID, DUMMY_BODY);
+
+    // Assert: URL / メソッド / ヘッダ / form-urlencoded body を検証する。
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const call = fetchMock.mock.calls[0];
+    expect(call).toBeDefined();
+    const [url, init] = call as [string, RequestInit | undefined];
+    expect(url).toBe(`${DUMMY_BASE_URL}/rooms/${DUMMY_ROOM_ID}/messages`);
+    expect(init?.method).toBe("POST");
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers["X-ChatWorkToken"]).toBe(DUMMY_API_TOKEN);
+    expect(headers["Content-Type"]).toBe("application/x-www-form-urlencoded");
+    // body は `body=<urlencoded>` の形で送られ、デコードすると本文と一致する。
+    expect(init?.body).toBe(new URLSearchParams({ body: DUMMY_BODY }).toString());
+    expect(new URLSearchParams(init?.body as string).get("body")).toBe(DUMMY_BODY);
+  });
+
+  it.each([
+    401, 403, 404, 429, 500,
+  ])("throws ChatworkApiError with status %i on a non-2xx response", async (status) => {
+    // Arrange: 認可/未存在/レート制限/サーバエラー。本文は読まない／含まれない。
+    stubFetch(async () => new Response("error detail body", { status }));
+    const client = createChatworkClient({ apiToken: DUMMY_API_TOKEN, baseUrl: DUMMY_BASE_URL });
+
+    // Act & Assert
+    await expect(client.postMessage(DUMMY_ROOM_ID, DUMMY_BODY)).rejects.toBeInstanceOf(
+      ChatworkApiError,
+    );
+    await expect(client.postMessage(DUMMY_ROOM_ID, DUMMY_BODY)).rejects.toMatchObject({
+      op: "chatwork.postMessage",
+      status,
+    });
+  });
+
+  it("throws ChatworkApiError when fetch rejects (network failure)", async () => {
+    // Arrange: ネットワーク失敗。生エラーは握りつぶされ操作名のみが伝わる。
+    stubFetch(async () => {
+      throw new Error("network down secret-leak-bait");
+    });
+    const client = createChatworkClient({ apiToken: DUMMY_API_TOKEN, baseUrl: DUMMY_BASE_URL });
+
+    // Act & Assert
+    await expect(client.postMessage(DUMMY_ROOM_ID, DUMMY_BODY)).rejects.toMatchObject({
+      op: "chatwork.postMessage",
+      status: undefined,
+    });
+  });
+
+  it("throws ChatworkApiError when a 2xx response is not valid JSON", async () => {
+    // Arrange: 2xx だが JSON として解釈できない本文。
+    stubFetch(async () => new Response("<html>not json</html>", { status: 200 }));
+    const client = createChatworkClient({ apiToken: DUMMY_API_TOKEN, baseUrl: DUMMY_BASE_URL });
+
+    // Act & Assert
+    await expect(client.postMessage(DUMMY_ROOM_ID, DUMMY_BODY)).rejects.toMatchObject({
+      op: "chatwork.postMessage",
+      status: 200,
+    });
+  });
+
+  it("throws ChatworkApiError when the response shape is invalid (missing message_id)", async () => {
+    // Arrange: 必須フィールド message_id 欠落。
+    stubFetch(async () => jsonResponse({ not: "message_id" }));
+    const client = createChatworkClient({ apiToken: DUMMY_API_TOKEN, baseUrl: DUMMY_BASE_URL });
+
+    // Act & Assert
+    await expect(client.postMessage(DUMMY_ROOM_ID, DUMMY_BODY)).rejects.toMatchObject({
+      op: "chatwork.postMessage",
+      status: 200,
+    });
+  });
+
+  it("never leaks the apiToken or the message body in the thrown error (NFR-002)", async () => {
+    // Arrange: トークン・本文漏洩を誘発しうる経路（非2xx + 本文に値を混ぜる）を組む。
+    const responseBody = `leak-bait:${DUMMY_BODY}`;
+    stubFetch(async () => new Response(responseBody, { status: 500 }));
+    const client = createChatworkClient({ apiToken: DUMMY_API_TOKEN, baseUrl: DUMMY_BASE_URL });
+
+    // Act
+    let caught: unknown;
+    try {
+      await client.postMessage(DUMMY_ROOM_ID, DUMMY_BODY);
+    } catch (err) {
+      caught = err;
+    }
+
+    // Assert: メッセージ・スタック・全列挙プロパティのいずれにもトークン・本文を含まない。
+    expect(caught).toBeInstanceOf(ChatworkApiError);
+    const error = caught as ChatworkApiError;
+    const serialized = [
+      error.message,
+      error.stack ?? "",
+      JSON.stringify({ ...error }),
+      JSON.stringify({
+        name: error.name,
+        message: error.message,
+        op: error.op,
+        status: error.status,
+      }),
+    ].join(" ");
+    expect(serialized).not.toContain(DUMMY_API_TOKEN);
+    expect(serialized).not.toContain(DUMMY_BODY);
+    expect(serialized).not.toContain(responseBody);
+  });
+});

@@ -173,9 +173,15 @@ jobs:
           CHATWORK_WEBHOOK_TOKEN_SECRET: ${{ vars.CHATWORK_WEBHOOK_TOKEN_SECRET }}
           CHATWORK_API_TOKEN_SECRET: ${{ vars.CHATWORK_API_TOKEN_SECRET }}
           SLACK_BOT_TOKEN_SECRET: ${{ vars.SLACK_BOT_TOKEN_SECRET }}
-          # Slack チャンネル ID は秘密ではない設定値。実値ではなく GitHub variable 経由で渡す。
+          # SLACK_SIGNING_SECRET（必須）の Secret Manager シークレット名。gcp factory が起動時に
+          # process.env.SLACK_SIGNING_SECRET_SECRET を必須チェックするため、GitHub variable 未設定だと
+          # ここが空展開され本番 Cloud Run の起動が失敗する（required-config-keys-break-cloud-run）。
+          SLACK_SIGNING_SECRET_SECRET: ${{ vars.SLACK_SIGNING_SECRET_SECRET }}
+          # Slack チャンネル ID・送信 allowlist は秘密ではない設定値。実値ではなく GitHub variable 経由で渡す。
           SLACK_DEFAULT_GROUP_CHANNEL_ID: ${{ vars.SLACK_DEFAULT_GROUP_CHANNEL_ID }}
           SLACK_DEFAULT_DM_CHANNEL_ID: ${{ vars.SLACK_DEFAULT_DM_CHANNEL_ID }}
+          # 送信操作の allowlist（任意・カンマ区切りの Slack user ID）。未設定なら空文字＝本人のみ許可で安全。
+          SLACK_ALLOWED_REPLY_USER_IDS: ${{ vars.SLACK_ALLOWED_REPLY_USER_IDS }}
         run: |
           set -euo pipefail
 
@@ -193,7 +199,7 @@ jobs:
             --max-instances 3 \
             --cpu 1 \
             --memory 512Mi \
-            --set-env-vars "^@@^NODE_ENV=production@@SECRET_BACKEND=gcp@@GOOGLE_CLOUD_PROJECT=${APP_PROJECT_ID}@@DATABASE_URL_SECRET=${DATABASE_URL_SECRET}@@DB_POOLED=true@@CHATWORK_WEBHOOK_TOKEN_SECRET=${CHATWORK_WEBHOOK_TOKEN_SECRET}@@CHATWORK_API_TOKEN_SECRET=${CHATWORK_API_TOKEN_SECRET}@@SLACK_BOT_TOKEN_SECRET=${SLACK_BOT_TOKEN_SECRET}@@SLACK_DEFAULT_GROUP_CHANNEL_ID=${SLACK_DEFAULT_GROUP_CHANNEL_ID}@@SLACK_DEFAULT_DM_CHANNEL_ID=${SLACK_DEFAULT_DM_CHANNEL_ID}" \
+            --set-env-vars "^@@^NODE_ENV=production@@SECRET_BACKEND=gcp@@GOOGLE_CLOUD_PROJECT=${APP_PROJECT_ID}@@DATABASE_URL_SECRET=${DATABASE_URL_SECRET}@@DB_POOLED=true@@CHATWORK_WEBHOOK_TOKEN_SECRET=${CHATWORK_WEBHOOK_TOKEN_SECRET}@@CHATWORK_API_TOKEN_SECRET=${CHATWORK_API_TOKEN_SECRET}@@SLACK_BOT_TOKEN_SECRET=${SLACK_BOT_TOKEN_SECRET}@@SLACK_SIGNING_SECRET_SECRET=${SLACK_SIGNING_SECRET_SECRET}@@SLACK_DEFAULT_GROUP_CHANNEL_ID=${SLACK_DEFAULT_GROUP_CHANNEL_ID}@@SLACK_DEFAULT_DM_CHANNEL_ID=${SLACK_DEFAULT_DM_CHANNEL_ID}@@SLACK_ALLOWED_REPLY_USER_IDS=${SLACK_ALLOWED_REPLY_USER_IDS}" \
             --labels "commit-sha=${GITHUB_SHA::12},managed-by=github-actions" \
             --quiet
 

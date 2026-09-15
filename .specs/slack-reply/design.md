@@ -203,8 +203,8 @@ export interface SlackMessage {
 ```ts
 /** 確認メッセージの Block を組み立てる（送信前確認 / REQ-004）。本文は escape 済みを渡す。 */
 export function buildConfirmBlocks(input: { quotedBody: string; outboundId: string }): SlackBlock[]
-/** 送信結果に応じた更新メッセージ（✅/❌/🚫/⛔）を組み立てる。 */
-export function buildResultMessage(kind: "sent" | "failed" | "cancelled" | "forbidden"): SlackMessage
+/** 送信結果に応じた更新メッセージ（✅/❌/🚫）を組み立てる。未認可は no-op のため forbidden 種別は持たない。 */
+export function buildResultMessage(kind: "sent" | "failed" | "cancelled"): SlackMessage
 ```
 
 - ボタン: `action_id = SLACK_ACTION_SEND ("cw_send")` / `SLACK_ACTION_CANCEL ("cw_cancel")`（名前付き定数 / coding-rules `[SHOULD]` マジック文字列排除）。`value = outboundId`。
@@ -255,7 +255,8 @@ export interface SendOutboundDeps {
 ```
 
 手順:
-1. **対象取得 + 認可（REQ-006/009）**: `outbound_messages` を id で取得（`slack_user_id` / `slack_confirm_ts` / `slack_channel_id` 含む）。押下ユーザー `pressUserId` が **`row.slack_user_id`（返信本人）と一致しない、かつ `allowedReplyUserIds`（非空時）にも含まれない** → `chat.update` で「⛔ この操作を行う権限がありません」、`outbound` は触らず return。
+1. **対象取得 + 認可（REQ-006/009）**: `outbound_messages` を id で取得（`slack_user_id` / `slack_confirm_ts` / `slack_channel_id` 含む）。押下ユーザー `pressUserId` が **`row.slack_user_id`（返信本人）と一致しない、かつ `allowedReplyUserIds`（非空時）にも含まれない** → **共有確認メッセージは更新せず no-op + 識別子ログ（`op="slack.outbound.forbidden"`）して return**。`outbound` も `chat.update` も触らない。
+   - **共有メッセージを上書きしない（Codex 指摘反映）**: 確認メッセージは共有のため、未認可押下で `chat.update` すると別ユーザーが他人の pending UI 破壊 / sent・cancelled 結果の上書きができてしまう（DoS・監査破壊・状態競合）。本人向けフィードバックが要る場合は将来 `response_url`/ephemeral で本人限定通知（YAGNI）。`chat.update` は **認可済みかつ状態遷移成功後のみ**に限定する。
 2. **claim**: `update outbound_messages set status='sending', updated_at=now() where id=? and status='pending' returning { chatworkRoomId, body }`。0 行 → 既に sending/sent/cancelled/failed とみなし return（二重送信防止 / NFR-004）。
    - claim 対象は **`pending` のみ**。`failed` は終端で再 claim しない（再送はユーザーの再返信で新 outbound を作る / REQ-006。これによりボタン除去後の UI と状態遷移の矛盾を避ける / Codex 指摘反映）。
 3. **Chatwork 投稿（tx 外）**: `chatworkClient.postMessage(roomId, body)`。
@@ -264,7 +265,7 @@ export interface SendOutboundDeps {
 4. **確定 tx が落ちた稀ケース**: 成功投稿後に tx が失敗すると `outbound` は `sending` のまま・`delivery_attempts` も残らない（tx ロールバック）。専用 `op`（`slack.outbound.commit_failed`）で識別子ログ。`sending` は claim 対象外のため二重投稿は起きない（NFR-005）。自動回復は #5。
 5. `chat.update` 失敗は識別子のみログ（DB の真実は確定済み / NFR-005）。
 
-`cancelOutbound`: 認可（手順1 と同じ）→ `update ... set status='cancelled' where id=? and status='pending' returning`。1 行のとき `chat.update`「🚫 キャンセルしました」。0 行は no-op。
+`cancelOutbound`: 認可（手順1 と同じ。未認可は no-op + ログ、共有メッセージ不変）→ `update ... set status='cancelled' where id=? and status='pending' returning`。1 行のとき `chat.update`「🚫 キャンセルしました」。0 行は no-op。
 
 > **claim の中間状態 `sending`**: `outbound_messages.status` の CHECK に `sending` を含める。Chatwork 投稿中にもう一度押されても `status='pending'` に該当せず claim 0 行 → 二重送信しない。`sending` 残留（プロセス死・commit 失敗）は #5 の retry/timeout 領域（本 Issue 対象外、`delivery_attempts` 不在で検出可能）。
 
@@ -400,6 +401,7 @@ stateDiagram-v2
 | 逆引き一意性 | `chatwork_messages(slack_channel_id, slack_ts)` partial unique index | `limit 1` ではなく DB 制約で一意逆引きを担保（Codex 指摘） |
 | 失敗後の再送 | `failed` は終端。再送は新規返信で別 outbound | ボタン除去 UI と状態遷移の矛盾を回避。自動 retry は #5 |
 | 操作認可 | 押下者 == 返信本人 OR allowlist | allowlist 未設定でも他人の確認を送信/キャンセルさせない（Codex 指摘） |
+| 未認可押下の扱い | no-op + ログ（共有メッセージ不変） | 共有確認メッセージを上書きすると他人 UI 破壊/結果上書きが可能になるため。本人通知は将来 response_url（Codex 指摘） |
 | 署名検証配置 | `adapters/slack/verify-signature.ts` | アダプタ境界（`[MUST]`）/ chatwork と対称 |
 | escape 共通化 | `format.ts` の escape を `adapters/slack/escape.ts` へ抽出 | DRY。confirm と format で同一エスケープを共有（`format.ts` 挙動は不変） |
 | signing secret 配線 | env + factory + workflow + docs を同時更新 | 必須キー追加で本番起動を壊さない（メモリ required-config-keys-break-cloud-run） |

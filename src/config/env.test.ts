@@ -17,6 +17,8 @@ const FORWARDING_REQUIRED: Partial<Record<SecretKey, string>> = {
   CHATWORK_WEBHOOK_TOKEN: "dummy-chatwork-webhook-token",
   CHATWORK_API_TOKEN: "dummy-chatwork-api-token",
   SLACK_BOT_TOKEN: "xoxb-dummy-slack-bot-token",
+  // slack-reply フェーズで追加された必須シークレット（DUMMY 値 / CON-005）。
+  SLACK_SIGNING_SECRET: "dummy-slack-signing-secret",
   SLACK_DEFAULT_GROUP_CHANNEL_ID: "C0DUMMYGROUP",
   SLACK_DEFAULT_DM_CHANNEL_ID: "C0DUMMYDM",
 };
@@ -79,6 +81,7 @@ describe("loadConfig", () => {
       CHATWORK_WEBHOOK_TOKEN: "dummy-chatwork-webhook-token",
       CHATWORK_API_TOKEN: "dummy-chatwork-api-token",
       SLACK_BOT_TOKEN: "xoxb-dummy-slack-bot-token",
+      SLACK_SIGNING_SECRET: "dummy-slack-signing-secret",
       SLACK_DEFAULT_GROUP_CHANNEL_ID: "C0DUMMYGROUP",
       SLACK_DEFAULT_DM_CHANNEL_ID: "C0DUMMYDM",
     });
@@ -130,6 +133,7 @@ describe("loadConfig", () => {
     "CHATWORK_WEBHOOK_TOKEN",
     "CHATWORK_API_TOKEN",
     "SLACK_BOT_TOKEN",
+    "SLACK_SIGNING_SECRET",
     "SLACK_DEFAULT_GROUP_CHANNEL_ID",
     "SLACK_DEFAULT_DM_CHANNEL_ID",
   ] as const)("throws ConfigError when required key %s is missing", (missingKey) => {
@@ -168,6 +172,57 @@ describe("loadConfig", () => {
       expect(configError.issues).toHaveProperty("SLACK_BOT_TOKEN");
       expect(serialized).not.toContain("dummy-chatwork-api-token");
       expect(serialized).not.toContain("xoxb-dummy-slack-bot-token");
+    }
+  });
+
+  it("succeeds without SLACK_ALLOWED_REPLY_USER_IDS (optional allowlist)", () => {
+    // allowlist は任意キー。未設定でも検証は成功し、本人のみ許可の既定動作になる（REQ-009 / NFR-007）。
+    const config = loadConfig(createSecretProvider({ ...VALID_BASE }));
+
+    expect(config.SLACK_ALLOWED_REPLY_USER_IDS).toBeUndefined();
+  });
+
+  it("accepts SLACK_ALLOWED_REPLY_USER_IDS when provided (comma-separated)", () => {
+    const config = loadConfig(
+      createSecretProvider({
+        ...VALID_BASE,
+        SLACK_ALLOWED_REPLY_USER_IDS: "U0DUMMYONE,U0DUMMYTWO",
+      }),
+    );
+
+    expect(config.SLACK_ALLOWED_REPLY_USER_IDS).toBe("U0DUMMYONE,U0DUMMYTWO");
+  });
+
+  it("throws ConfigError when SLACK_SIGNING_SECRET is missing", () => {
+    const values = { ...VALID_BASE };
+    delete values.SLACK_SIGNING_SECRET;
+
+    try {
+      loadConfig(createSecretProvider(values));
+      throw new Error("loadConfig should throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigError);
+      const configError = err as ConfigError;
+      expect(configError.issues).toHaveProperty("SLACK_SIGNING_SECRET");
+    }
+  });
+
+  it("keeps the SLACK_SIGNING_SECRET value out of ConfigError when it is invalid", () => {
+    // 空文字（min(1) 違反）。エラーにキー名は持つが値（DUMMY signing secret）は含めない（NFR-002）。
+    try {
+      loadConfig(
+        createSecretProvider({
+          ...VALID_BASE,
+          SLACK_SIGNING_SECRET: "",
+        }),
+      );
+      throw new Error("loadConfig should throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConfigError);
+      const configError = err as ConfigError;
+      const serialized = JSON.stringify(configError.issues);
+      expect(configError.issues).toHaveProperty("SLACK_SIGNING_SECRET");
+      expect(serialized).not.toContain("dummy-slack-signing-secret");
     }
   });
 

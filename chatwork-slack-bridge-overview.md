@@ -226,6 +226,13 @@ Actions: [送信する] [キャンセル]
 
 ## PostgreSQL データモデル案
 
+> **注記**: 以下は設計の先行スケッチ（案）です。実装済みテーブル（`chatwork_rooms` /
+> `chatwork_messages` / `chatwork_room_members` / `chatwork_message_attachments` /
+> `outbound_messages` / `delivery_attempts`）の**正となる定義は `src/db/schema.ts` と
+> `src/db/migrations/` の Drizzle migration** です。差異がある場合は migration を正とします
+> （`outbound_messages` / `delivery_attempts` は slack-reply フェーズの `.specs/slack-reply/design.md`
+> §5.1/§5.2 と migration に合わせて更新済み）。`ai_drafts` / `message_embeddings` は未実装の案です。
+
 ### `chatwork_rooms`
 
 ```sql
@@ -274,7 +281,17 @@ create index chatwork_messages_room_sent_at_idx
 
 create index chatwork_messages_status_idx
   on chatwork_messages (status);
+
+-- slack-reply のスレッド逆引き（slack_channel_id = ? AND slack_ts = ?）の一意性・性能を担保する
+-- partial unique index。両カラム non-null（= forwarding で Slack 投稿済み）の行に限る。
+create unique index chatwork_messages_slack_channel_ts_unique
+  on chatwork_messages (slack_channel_id, slack_ts)
+  where slack_channel_id is not null and slack_ts is not null;
 ```
+
+> slack-reply フェーズで `(slack_channel_id, slack_ts)` の **partial unique index**（両カラム non-null）を
+> 追加した。返信スレッドの親 `thread_ts` から返信先 `chatwork_room_id` を一意に逆引きするために使う
+> （`slack_ts` はチャンネル内で一意。未投稿（null）行は制約から除外し複数 null を許容）。
 
 > `sender_name` は sender-name フェーズで populate されるようになった。Chatwork メンバー API
 > （`GET /rooms/{room_id}/members`）で `chatwork_account_id` から解決した表示名を保存する。
@@ -336,42 +353,55 @@ create index chatwork_message_attachments_message_idx
 ```sql
 create table outbound_messages (
   id bigint generated always as identity primary key,
-  chatwork_room_id text not null references chatwork_rooms(chatwork_room_id),
-  source text not null default 'slack',
+  chatwork_room_id text not null references chatwork_rooms(chatwork_room_id),     -- 返信先ルーム（FK + index）
+  source_chatwork_message_id bigint
+    references chatwork_messages(id) on delete set null,                          -- 返信元の転送メッセージ（traceability。FK + index / 親削除で null 化）
   slack_channel_id text not null,
-  slack_user_id text not null,
-  slack_thread_ts text,
+  slack_thread_ts text not null,                                                  -- 逆引き結果（= 返信先メッセージの slack_ts）のスナップショット
+  slack_reply_ts text not null,                                                   -- トリガとなったユーザー返信の ts（冪等キー）
+  slack_confirm_ts text,                                                          -- 確認メッセージの ts（chat.update 対象）。投稿後に設定
+  slack_user_id text,                                                             -- 返信を書いた本人の Slack user id（送信/キャンセル操作の認可に使う）
   body text not null,
-  status text not null default 'pending',
-  chatwork_message_id text,
-  error_message text,
+  status text not null default 'pending'
+    check (status in ('pending','sending','sent','cancelled','failed')),          -- sending=claim 中間状態 / failed=終端
+  chatwork_message_id text,                                                       -- 送信成功時の Chatwork message id
+  error_message text,                                                             -- 失敗時の要約（識別子のみ。本文・トークン非含有）
   created_at timestamptz not null default now(),
-  sent_at timestamptz
+  updated_at timestamptz not null default now(),
+  unique (slack_channel_id, slack_reply_ts)                                       -- 冪等キー（Events 再送で同一 reply を二重作成しない）
 );
 
-create index outbound_messages_room_created_at_idx
-  on outbound_messages (chatwork_room_id, created_at desc);
-
-create index outbound_messages_status_idx
-  on outbound_messages (status);
+create index outbound_messages_room_idx   on outbound_messages (chatwork_room_id);            -- FK index
+create index outbound_messages_source_idx on outbound_messages (source_chatwork_message_id);  -- FK index
+create index outbound_messages_status_idx on outbound_messages (status);
 ```
+
+> slack-reply フェーズで追加。Slack スレッド返信を検出すると `pending` で作成し、送信確認を経て
+> Chatwork へ投稿する。状態遷移（`pending → sending → sent/failed` / `pending → cancelled`）の
+> 詳細は `.specs/slack-reply/design.md` §5.1/§5.4 を参照。ボタン押下の二重送信は `pending → sending` の
+> 条件付き UPDATE claim（`sending` は中間状態）で防ぐ。`failed` は終端で、再送はユーザーのスレッド
+> 再返信で別 outbound を作る。送信/キャンセルの認可は押下者 == `slack_user_id`（返信本人）または
+> allowlist（`SLACK_ALLOWED_REPLY_USER_IDS`）で行う。
 
 ### `delivery_attempts`
 
 ```sql
 create table delivery_attempts (
   id bigint generated always as identity primary key,
-  outbound_message_id bigint references outbound_messages(id),
-  target text not null,
-  status text not null,
-  attempt_count integer not null default 1,
-  error_message text,
-  created_at timestamptz not null default now()
+  outbound_message_id bigint not null references outbound_messages(id),  -- FK + index
+  result text not null check (result in ('success','failure')),
+  http_status integer,                                                   -- Chatwork API の HTTP ステータス（取得できなければ null）
+  error_code text,                                                       -- 失敗時の op 名等の識別子（本文・トークン非含有）
+  attempted_at timestamptz not null default now()
 );
 
-create index delivery_attempts_outbound_message_id_idx
+create index delivery_attempts_outbound_idx
   on delivery_attempts (outbound_message_id);
 ```
+
+> slack-reply フェーズで追加。1 outbound に対する Chatwork 配送試行（成功/失敗）を追記し、配送試行を
+> 監査可能にする（coding-rules `[MUST]` 外部送信失敗の記録）。`outbound_messages` の確定状態更新
+> （`sent`/`failed`）と同一トランザクションで記録する（design §5.2）。
 
 > スキーマ方針（`docs/coding-rules.md` の「データベース（PostgreSQL / Drizzle）」参照）:
 > - 主キーは `bigint generated always as identity`（`serial`/`bigserial` は使わない）。
@@ -826,11 +856,10 @@ jobs:
 
 ## 未決定事項
 
-- Slack での送信UI
-  - スレッド返信 + 確認ボタン
-  - `/cw send` コマンド
-  - モーダル入力
-- AIプロバイダ
+- ~~Slack での送信UI~~ → **確定: スレッド返信 + 確認ボタン**（slack-reply フェーズで実装済み / `.specs/slack-reply`）
+  - 転送メッセージの Slack スレッドへ返信すると、bridge が［送信］/［キャンセル］ボタン付きの確認メッセージを投稿し、押下で Chatwork へ投稿する。
+  - 返信スレッドの親（`slack_ts`）から返信先 Chatwork ルームを逆引きできるため、`/cw send` コマンドやモーダル入力（返信先の明示指定が要る）は採用しない。
+- AIプロバイダ（未決定）
   - Claude
   - ChatGPT
   - 両方

@@ -22,14 +22,15 @@ const DUMMY_PNG_BYTES = new Uint8Array([
 // @slack/web-api をアダプタ境界でモックする（ネットワーク非依存 / coding-rules SHOULD）。
 // postMessage / files.uploadV2 の振る舞いは各テストでモックに差し替える。
 const postMessageMock = vi.fn();
+const updateMock = vi.fn();
 const uploadV2Mock = vi.fn();
 
 vi.mock("@slack/web-api", () => ({
   WebClient: class {
-    public chat: { postMessage: typeof postMessageMock };
+    public chat: { postMessage: typeof postMessageMock; update: typeof updateMock };
     public files: { uploadV2: typeof uploadV2Mock };
     constructor(public token: string) {
-      this.chat = { postMessage: postMessageMock };
+      this.chat = { postMessage: postMessageMock, update: updateMock };
       this.files = { uploadV2: uploadV2Mock };
     }
   },
@@ -51,6 +52,7 @@ function makeUploadInput(override: Partial<SlackUploadFileInput> = {}): SlackUpl
 
 beforeEach(() => {
   postMessageMock.mockReset();
+  updateMock.mockReset();
   uploadV2Mock.mockReset();
 });
 
@@ -168,6 +170,160 @@ describe("createSlackClient.postMessage", () => {
     expect(serialized).not.toContain(DUMMY_BOT_TOKEN);
     expect(serialized).not.toContain(leakBaitBody);
     // 安全なエラーコード（識別子）は伝わってよい。
+    expect(error.slackError).toBe("rate_limited");
+  });
+
+  it("passes thread_ts and blocks (plus text fallback) through to chat.postMessage", async () => {
+    // Arrange: スレッド返信 + Block Kit 投稿（確認 UI）。
+    postMessageMock.mockResolvedValue({ ok: true, ts: DUMMY_TS });
+    const client = createSlackClient({ botToken: DUMMY_BOT_TOKEN });
+    const blocks = [{ type: "section", text: { type: "mrkdwn", text: DUMMY_TEXT } }];
+
+    // Act
+    const result = await client.postMessage(
+      DUMMY_CHANNEL_ID,
+      { text: DUMMY_TEXT, blocks },
+      { threadTs: toSlackTs(DUMMY_TS) },
+    );
+
+    // Assert
+    expect(result).toEqual({ ts: DUMMY_TS });
+    expect(postMessageMock).toHaveBeenCalledTimes(1);
+    expect(postMessageMock).toHaveBeenCalledWith({
+      channel: DUMMY_CHANNEL_ID,
+      text: DUMMY_TEXT,
+      thread_ts: DUMMY_TS,
+      blocks,
+    });
+  });
+
+  it("omits thread_ts and blocks keys entirely for a plain top-level post (backward compat)", async () => {
+    // Arrange: 既存の 2 引数呼び出しでは undefined キーを混ぜない（exactOptionalPropertyTypes）。
+    postMessageMock.mockResolvedValue({ ok: true, ts: DUMMY_TS });
+    const client = createSlackClient({ botToken: DUMMY_BOT_TOKEN });
+
+    // Act
+    await client.postMessage(DUMMY_CHANNEL_ID, { text: DUMMY_TEXT });
+
+    // Assert: 余計なキーが付かない（thread_ts / blocks を持たない）。
+    const callArg = postMessageMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(callArg).toEqual({ channel: DUMMY_CHANNEL_ID, text: DUMMY_TEXT });
+    expect(callArg).not.toHaveProperty("thread_ts");
+    expect(callArg).not.toHaveProperty("blocks");
+  });
+});
+
+describe("createSlackClient.updateMessage", () => {
+  it("calls chat.update with channel, ts, text and blocks on success", async () => {
+    // Arrange
+    updateMock.mockResolvedValue({ ok: true, ts: DUMMY_TS });
+    const client = createSlackClient({ botToken: DUMMY_BOT_TOKEN });
+    const blocks = [{ type: "section", text: { type: "mrkdwn", text: "✅ done" } }];
+
+    // Act
+    await client.updateMessage(DUMMY_CHANNEL_ID, toSlackTs(DUMMY_TS), { text: DUMMY_TEXT, blocks });
+
+    // Assert
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(updateMock).toHaveBeenCalledWith({
+      channel: DUMMY_CHANNEL_ID,
+      ts: DUMMY_TS,
+      text: DUMMY_TEXT,
+      blocks,
+    });
+  });
+
+  it("omits the blocks key when message has no blocks", async () => {
+    // Arrange
+    updateMock.mockResolvedValue({ ok: true, ts: DUMMY_TS });
+    const client = createSlackClient({ botToken: DUMMY_BOT_TOKEN });
+
+    // Act
+    await client.updateMessage(DUMMY_CHANNEL_ID, toSlackTs(DUMMY_TS), { text: DUMMY_TEXT });
+
+    // Assert
+    const callArg = updateMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(callArg).toEqual({ channel: DUMMY_CHANNEL_ID, ts: DUMMY_TS, text: DUMMY_TEXT });
+    expect(callArg).not.toHaveProperty("blocks");
+  });
+
+  it("throws SlackApiError when the response is ok: false", async () => {
+    // Arrange: SDK が例外化せず ok:false を返すケース。
+    updateMock.mockResolvedValue({ ok: false, error: "message_not_found" });
+    const client = createSlackClient({ botToken: DUMMY_BOT_TOKEN });
+
+    // Act & Assert
+    await expect(
+      client.updateMessage(DUMMY_CHANNEL_ID, toSlackTs(DUMMY_TS), { text: DUMMY_TEXT }),
+    ).rejects.toBeInstanceOf(SlackApiError);
+    await expect(
+      client.updateMessage(DUMMY_CHANNEL_ID, toSlackTs(DUMMY_TS), { text: DUMMY_TEXT }),
+    ).rejects.toMatchObject({
+      op: "slack.updateMessage",
+      channelId: DUMMY_CHANNEL_ID,
+      slackError: "message_not_found",
+    });
+  });
+
+  it("throws SlackApiError exposing the Slack error code when the SDK throws", async () => {
+    // Arrange: SDK は API エラーで例外を送出し data.error にコードを載せる。
+    updateMock.mockRejectedValue({ data: { error: "rate_limited" } });
+    const client = createSlackClient({ botToken: DUMMY_BOT_TOKEN });
+
+    // Act & Assert
+    await expect(
+      client.updateMessage(DUMMY_CHANNEL_ID, toSlackTs(DUMMY_TS), { text: DUMMY_TEXT }),
+    ).rejects.toMatchObject({
+      op: "slack.updateMessage",
+      channelId: DUMMY_CHANNEL_ID,
+      slackError: "rate_limited",
+    });
+  });
+
+  it("throws SlackApiError when the SDK throws without a recognizable data.error code", async () => {
+    // Arrange: ネットワーク失敗等、コードを抽出できない例外。
+    updateMock.mockRejectedValue(new Error("network down"));
+    const client = createSlackClient({ botToken: DUMMY_BOT_TOKEN });
+
+    // Act & Assert
+    await expect(
+      client.updateMessage(DUMMY_CHANNEL_ID, toSlackTs(DUMMY_TS), { text: DUMMY_TEXT }),
+    ).rejects.toMatchObject({
+      op: "slack.updateMessage",
+      slackError: undefined,
+    });
+  });
+
+  it("never leaks the bot token or message body in the thrown error or its serialization", async () => {
+    // Arrange: token・本文を含む可能性のある経路（汚染フィールド）を組む。
+    const leakBaitBody = "leak-bait-update-body";
+    updateMock.mockRejectedValue({
+      data: { error: "rate_limited" },
+      token: DUMMY_BOT_TOKEN,
+      requestBody: leakBaitBody,
+    });
+    const client = createSlackClient({ botToken: DUMMY_BOT_TOKEN });
+
+    // Act
+    let caught: unknown;
+    try {
+      await client.updateMessage(DUMMY_CHANNEL_ID, toSlackTs(DUMMY_TS), { text: leakBaitBody });
+    } catch (err) {
+      caught = err;
+    }
+
+    // Assert
+    expect(caught).toBeInstanceOf(SlackApiError);
+    const error = caught as SlackApiError;
+    const serialized = `${error.message} ${JSON.stringify({ ...error })} ${JSON.stringify({
+      name: error.name,
+      message: error.message,
+      op: error.op,
+      channelId: error.channelId,
+      slackError: error.slackError,
+    })}`;
+    expect(serialized).not.toContain(DUMMY_BOT_TOKEN);
+    expect(serialized).not.toContain(leakBaitBody);
     expect(error.slackError).toBe("rate_limited");
   });
 });

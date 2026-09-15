@@ -38,15 +38,33 @@ export function toSlackTs(value: string): SlackTs {
 }
 
 /**
+ * Slack Block Kit のブロック（`chat.postMessage` / `chat.update` の `blocks` 要素 / REQ-008）。
+ *
+ * `@slack/web-api` は `blocks` を `(KnownBlock | Block)[]` で受け取るが、`@slack/types` は
+ * 直接の依存ではなく（transitive）型解決が脆いため、ここでは Slack の Block 基底（`type` を
+ * 必須に持つオブジェクト）と互換な最小の構造型として定義する。`confirm-message.ts` が組み立てた
+ * ブロックはこの型で `SlackMessage.blocks` に載り、adapter（`client.ts`）が SDK 境界で受け渡す。
+ * 任意の Block Kit フィールドを許容するため index signature を持たせる（型安全と SDK 互換のバランス）。
+ */
+export interface SlackBlock {
+  /** ブロック種別（`section` / `actions` など）。Slack の `Block` 基底と同じく必須。 */
+  type: string;
+  /** 任意の Block Kit フィールド（`text` / `elements` / `block_id` など）。 */
+  [key: string]: unknown;
+}
+
+/**
  * Slack へ投稿するメッセージのペイロード。
  *
- * 本フェーズ（forwarding）は本文＋メタを `text` として組み立てたトップレベル投稿のみで、
- * アクションボタン（Block Kit action elements）は含めない（REQ-008 / 設計 §4.7）。
- * `format` の出力がそのまま `SlackClient.postMessage` の引数になるよう、両者で共有する。
+ * `format`（forwarding）の出力は `text` のみで、`SlackClient.postMessage` の引数として共有される。
+ * slack-reply 以降の確認 UI 用に `blocks` を**任意**追加する（既存の `{ text }` のみの利用は不変 /
+ * REQ-008 / CON-001）。`blocks` 併用時も `text` はフォールバック表示として常に渡す。
  */
 export interface SlackMessage {
   /** 投稿本文。ルーム名・送信者・本文を整形した plain text。 */
   text: string;
+  /** 確認 UI 等の Block Kit ブロック（任意。未指定なら text のみ / REQ-008）。 */
+  blocks?: SlackBlock[];
 }
 
 /**

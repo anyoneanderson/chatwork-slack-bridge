@@ -37,6 +37,7 @@ function makeConfig(): Config {
     CHATWORK_WEBHOOK_TOKEN: DUMMY_WEBHOOK_TOKEN,
     CHATWORK_API_TOKEN: "dummy-chatwork-api-token",
     SLACK_BOT_TOKEN: "xoxb-dummy-slack-bot-token",
+    SLACK_SIGNING_SECRET: "dummy-slack-signing-secret",
     SLACK_DEFAULT_GROUP_CHANNEL_ID: "C0DUMMYGROUP",
     SLACK_DEFAULT_DM_CHANNEL_ID: "C0DUMMYDM",
   };
