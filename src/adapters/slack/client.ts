@@ -1,12 +1,42 @@
-import { WebClient } from "@slack/web-api";
+import { ErrorCode, WebClient } from "@slack/web-api";
+import { z } from "zod";
 import type {
   SlackBlock,
   SlackChannelId,
+  SlackFailureKind,
   SlackMessage,
   SlackTs,
   SlackUploadFileInput,
 } from "@/adapters/slack/types";
 import { toSlackTs } from "@/adapters/slack/types";
+
+// 成否を断定できる Slack の既知コードだけを外へ渡す。未登録コードは成否不明とする。
+const REJECTED_SLACK_ERRORS = [
+  "channel_not_found",
+  "not_in_channel",
+  "is_archived",
+  "invalid_auth",
+  "not_authed",
+  "token_revoked",
+  "token_expired",
+  "account_inactive",
+  "missing_scope",
+  "no_permission",
+  "restricted_action",
+  "invalid_arguments",
+  "invalid_arg_name",
+  "invalid_array_arg",
+  "invalid_blocks",
+  "invalid_blocks_format",
+  "msg_too_long",
+  "no_text",
+  "too_many_attachments",
+  "message_not_found",
+  "cant_update_message",
+  "edit_window_closed",
+] as const;
+const RATE_LIMIT_ERRORS = ["rate_limited", "ratelimited"] as const;
+const SAFE_SLACK_ERRORS: readonly string[] = [...REJECTED_SLACK_ERRORS, ...RATE_LIMIT_ERRORS];
 
 /**
  * Slack API 呼び出しの失敗を表す（REQ-008）。
@@ -22,6 +52,10 @@ export class SlackApiError extends Error {
   public readonly channelId: SlackChannelId;
   /** Slack が返したエラーコード（`ok: false` の `error` フィールド等）。取得できない場合は undefined。 */
   public readonly slackError: string | undefined;
+  /** 確定拒否・レート制限・成否不明の区別。 */
+  public readonly kind: SlackFailureKind;
+  /** Slack が返した、再試行までの待ち秒数。 */
+  public readonly retryAfterSeconds: number | undefined;
 
   /**
    * 失敗した操作名・チャンネル ID・Slack エラーコードを保持する。
@@ -29,18 +63,32 @@ export class SlackApiError extends Error {
    * @param op 失敗した操作名（例: `slack.postMessage`）
    * @param channelId 対象チャンネル ID
    * @param slackError Slack のエラーコード（取得できない場合は省略）
+   * @param options 固定の失敗分類と Retry-After 秒数
    * @returns SlackApiError インスタンス
    */
-  constructor(op: string, channelId: SlackChannelId, slackError?: string) {
+  constructor(
+    op: string,
+    channelId: SlackChannelId,
+    slackError?: string,
+    options: { kind?: SlackFailureKind; retryAfterSeconds?: number } = {},
+  ) {
+    const safeError = safeSlackError(slackError);
     super(
-      slackError === undefined
+      safeError === undefined
         ? `Slack API call failed: ${op}`
-        : `Slack API call failed: ${op} (${slackError})`,
+        : `Slack API call failed: ${op} (${safeError})`,
     );
     this.name = "SlackApiError";
     this.op = op;
     this.channelId = channelId;
-    this.slackError = slackError;
+    this.slackError = safeError;
+    this.kind = options.kind ?? classifyPlatformError(safeError);
+    this.retryAfterSeconds =
+      typeof options.retryAfterSeconds === "number" &&
+      Number.isFinite(options.retryAfterSeconds) &&
+      options.retryAfterSeconds >= 0
+        ? options.retryAfterSeconds
+        : undefined;
   }
 }
 
@@ -104,8 +152,17 @@ export interface SlackClient {
  * @param deps `botToken`（`SLACK_BOT_TOKEN`。secret adapter 経由）
  * @returns `SlackClient` 実装
  */
-export function createSlackClient(deps: { botToken: string }): SlackClient {
-  const web = new WebClient(deps.botToken);
+export function createSlackClient(deps: {
+  botToken: string;
+  retryDisabled?: boolean;
+}): SlackClient {
+  // Google Chat の配送は永続状態で再開するため、SDK 内部で曖昧な投稿を再送しない。
+  const web = new WebClient(
+    deps.botToken,
+    deps.retryDisabled
+      ? { retryConfig: { retries: 0 }, rejectRateLimitedCalls: true, timeout: 15000 }
+      : {},
+  );
 
   return {
     async postMessage(
@@ -125,12 +182,14 @@ export function createSlackClient(deps: { botToken: string }): SlackClient {
       } catch (error) {
         // SDK は API エラー（platform / rate-limit / network）で例外を送出する。
         // 生エラーには token が載らない設計だが、念のため Slack のエラーコードのみ抽出して伝える。
-        throw new SlackApiError(op, channelId, extractSlackErrorCode(error));
+        throw fromCaughtError(op, channelId, error);
       }
 
       if (!response.ok || typeof response.ts !== "string") {
         // ok: false（または ts 欠落）は SDK が例外化しないケースもあるため明示的に弾く。
-        throw new SlackApiError(op, channelId, response.error);
+        throw new SlackApiError(op, channelId, response.error, {
+          kind: response.ok === false ? classifyPlatformError(response.error) : "unknown",
+        });
       }
 
       return { ts: toSlackTs(response.ts) };
@@ -149,7 +208,7 @@ export function createSlackClient(deps: { botToken: string }): SlackClient {
       } catch (error) {
         // SDK は API エラー（platform / rate-limit / network）で例外を送出する。
         // 生エラーには token が載らない設計だが、念のため Slack のエラーコードのみ抽出して伝える。
-        throw new SlackApiError(op, channelId, extractSlackErrorCode(error));
+        throw fromCaughtError(op, channelId, error);
       }
 
       if (!response.ok) {
@@ -174,7 +233,7 @@ export function createSlackClient(deps: { botToken: string }): SlackClient {
       } catch (error) {
         // SDK は API エラー（platform / rate-limit / network）で例外を送出する。
         // 生エラーには token・ファイル名・バイトを載せず、Slack のエラーコードのみ抽出する。
-        throw new SlackApiError(op, input.channelId, extractSlackErrorCode(error));
+        throw fromCaughtError(op, input.channelId, error);
       }
 
       if (response.ok === false) {
@@ -185,7 +244,7 @@ export function createSlackClient(deps: { botToken: string }): SlackClient {
       const slackFileId = extractSlackFileId(response);
       if (slackFileId === undefined) {
         // 成功扱いでも file.id が取れない（レスポンス形ブレ・欠落）場合は失敗とする。
-        throw new SlackApiError(op, input.channelId, response.error);
+        throw new SlackApiError(op, input.channelId, response.error, { kind: "unknown" });
       }
 
       return { slackFileId };
@@ -317,27 +376,37 @@ function extractId(value: unknown): string | undefined {
   return undefined;
 }
 
-/**
- * Slack SDK が送出したエラーから安全なエラーコードのみを取り出す。
- *
- * token・リクエスト本文・スタックは取り出さず、`data.error`（Slack のエラーコード文字列）が
- * あればそれだけを返す（NFR-003）。
- *
- * @param error catch したエラー
- * @returns Slack のエラーコード文字列（取得できない場合は undefined）
- */
-function extractSlackErrorCode(error: unknown): string | undefined {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "data" in error &&
-    typeof (error as { data: unknown }).data === "object" &&
-    (error as { data: unknown }).data !== null
-  ) {
-    const data = (error as { data: { error?: unknown } }).data;
-    if (typeof data.error === "string") {
-      return data.error;
-    }
+/** 値そのものをログへ伝えず、既知の固定コードだけを採用する。 */
+function safeSlackError(value: unknown): string | undefined {
+  return typeof value === "string" && SAFE_SLACK_ERRORS.includes(value) ? value : undefined;
+}
+
+function classifyPlatformError(value: unknown): SlackFailureKind {
+  const code = safeSlackError(value);
+  if (code && (RATE_LIMIT_ERRORS as readonly string[]).includes(code)) return "rate_limited";
+  if (code && (REJECTED_SLACK_ERRORS as readonly string[]).includes(code)) return "rejected";
+  return "unknown";
+}
+
+/** SDK の code で種類を識別し、本文・headers・生エラーを保持しない。 */
+function fromCaughtError(op: string, channelId: SlackChannelId, error: unknown): SlackApiError {
+  const parsed = z
+    .object({
+      code: z.string().optional(),
+      retryAfter: z.unknown().optional(),
+      data: z.object({ error: z.unknown().optional() }).optional(),
+    })
+    .safeParse(error);
+  if (!parsed.success) return new SlackApiError(op, channelId, undefined, { kind: "unknown" });
+  if (parsed.data.code === ErrorCode.RateLimitedError) {
+    const delay = z.number().finite().nonnegative().safeParse(parsed.data.retryAfter);
+    return new SlackApiError(op, channelId, "rate_limited", {
+      kind: "rate_limited",
+      ...(delay.success ? { retryAfterSeconds: delay.data } : {}),
+    });
   }
-  return undefined;
+  const code = safeSlackError(parsed.data.data?.error);
+  return new SlackApiError(op, channelId, code, {
+    kind: parsed.data.code === ErrorCode.PlatformError ? classifyPlatformError(code) : "unknown",
+  });
 }

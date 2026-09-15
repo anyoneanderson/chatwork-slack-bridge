@@ -19,6 +19,12 @@ Chatwork を日常的に開かずに、クライアントとのやり取りを S
 
 ## 全体構成
 
+Google Chat 連携を有効にした場合は、ユーザー OAuth で指定した1スペースを定期取得する。
+`GOOGLE_CHAT_POLL_MODE=timer` はアプリ内タイマー、`external` は専用 Bearer トークンで認証した HTTP リクエストを起点に同じ取得処理を実行する。
+Cloud Run 用デプロイでは `external` を使い、Cloud Scheduler から毎分呼び出す。最小インスタンス数は0、CPU割り当てはリクエスト中に限定する。
+Google のスレッドと Slack の親投稿を DB に対応付け、許可した Slack ユーザーが確認ボタンを押した返信だけを元の Google スレッドへ送信する。
+接続設定、初回取得範囲、障害時の復旧手順は [Google Chat の接続・運用手順](docs/google-chat.md)を参照。
+
 ```text
 Chatwork Webhook
   -> Bridge API: Hono app
@@ -225,6 +231,19 @@ Actions: [送信する] [キャンセル]
 - Claude / ChatGPT / Codex の定期チェック
 
 ## PostgreSQL データモデル案
+
+Google Chat には以下の専用テーブルを追加する。既存の Chatwork のテーブル・識別子は変更しない。
+
+| テーブル | 保存する情報と制約 |
+|---|---|
+| `google_chat_connections` | アカウント・スペース・Slack チャンネル、設定の照合値、有効状態、取得済み日時、途中ページ、期限付き実行権、停止理由と通知状態。初期版は `default` 接続1件。 |
+| `google_chat_threads` | 接続と Google thread 名、Slack 親投稿の対応。接続・thread 名と Slack チャンネル・親投稿をそれぞれ一意にする。 |
+| `google_chat_inbox` | Google message 名、本文、送信者名、作成日時、転送状態と Slack 投稿時刻。接続・message 名で重複を防ぐ。 |
+| `google_chat_outbox` | 確認対象の本文、操作ユーザー、返信先、Slack 確認投稿、Google の messageId・requestId・送信結果。Slack 返信イベントを一意にする。 |
+| `google_chat_delivery_attempts` | 受信転送または返信送信・照会の実行結果。本文やトークンをログへ出さず DB の対象行を参照する。 |
+
+外部 API を呼ぶ前に `sending` を保存する。応答を受け取れなかった送信は `unknown` として、自動再投稿を止める。
+Google への返信は保存した messageId を使って GET で結果を照会できる。Slack 転送の結果不明時は、運用者が投稿と DB を照合して再開する。
 
 > **注記**: 以下は設計の先行スケッチ（案）です。実装済みテーブル（`chatwork_rooms` /
 > `chatwork_messages` / `chatwork_room_members` / `chatwork_message_attachments` /
@@ -460,6 +479,9 @@ Chatwork Webhook を受ける（forwarding フェーズで実装済み）。公�
 
 ### `POST /slack/events`
 
+Google Chat の親投稿に対する返信は、署名検証後に Google Chat 用処理へ渡す。
+該当する対応行がなければ既存の Chatwork 用処理を継続する。
+
 Slack Events API を受ける。
 
 主な処理。
@@ -471,6 +493,8 @@ Slack Events API を受ける。
 
 ### `POST /slack/interactions`
 
+Google Chat 用の `gc_send` / `gc_cancel` / `gc_check` は、署名・返信者・許可ユーザー・接続状態を検証して処理する。
+
 Slack のボタン操作やモーダル送信を受ける。
 
 主な処理。
@@ -479,6 +503,17 @@ Slack のボタン操作やモーダル送信を受ける。
 - 返信案生成
 - 対応済みマーク
 - キャンセル処理
+
+### `POST /internal/poll-google-chat`
+
+Google Chat が有効で `GOOGLE_CHAT_POLL_MODE=external` の場合だけ登録する。
+`Authorization: Bearer <GOOGLE_CHAT_POLL_TOKEN>` を検証し、空の本文または空の JSON オブジェクトを受け付ける。
+接続先と取得範囲はサーバーの設定と DB から決め、リクエストで指定させない。
+取得と転送が終了してから応答し、HTTP 応答後に取得処理を残さない。
+45秒での区切りと `complete`、503 応答の意味は[HTTP 呼び出しの契約](docs/google-chat.md#cron-などからの-http-呼び出し)を参照。
+同一プロセスの並行実行を拒否し、複数インスタンス間では既存の DB リースと一意制約で重複を防ぐ。
+トークンは secret adapter から取得する。`env` backend は `GOOGLE_CHAT_POLL_TOKEN`、`gcp` backend は `GOOGLE_CHAT_POLL_TOKEN_SECRET` が指す Secret Manager の値を使う。
+Cloud Scheduler は起動手段の一例であり、HTTP 呼び出しができる cron などでも運用できる。
 
 ### `POST /internal/send-chatwork-message`
 
@@ -494,6 +529,7 @@ OSSとして育てるため、外部サービス依存は薄いアダプタに�
 src/
   adapters/
     chatwork/
+    google-chat/
     slack/
     queue/
     secrets/
@@ -509,6 +545,7 @@ src/
 初期実装で用意するアダプタ。
 
 - `chatwork`: Chatwork API / Webhook payload / 署名検証
+- `google-chat`: Google Chat REST API / OAuth 更新 / 本人確認 / 指定スペースのリソース検証
 - `slack`: Slack Web API / request署名検証 / interactive components
 - `queue`: DB-backed queue
 - `secrets`: environment variables
@@ -564,6 +601,7 @@ Google Cloud向けに追加するアダプタ。
 - Slack bot token は secret adapter 経由で扱う
 - PostgreSQL 接続文字列は secret adapter 経由で扱う
 - 公開エンドポイントは必要最小限にする
+- 外部スケジューラー用の取得エンドポイントは `external` モードでのみ登録する。専用 Bearer トークンを検証し、空の入力だけ受け付け、同一プロセスの同時実行を拒否する
 - PostgreSQL には必要なメッセージだけ保存
 - ログにAPIトークンや全文メッセージを不用意に出さない
 

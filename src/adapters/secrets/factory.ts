@@ -35,11 +35,12 @@ export class SecretConfigError extends Error {
  * `DATABASE_URL_SECRET` / `CHATWORK_WEBHOOK_TOKEN_SECRET` / `CHATWORK_API_TOKEN_SECRET` /
  * `SLACK_BOT_TOKEN_SECRET` / `SLACK_SIGNING_SECRET_SECRET` は secret provider 構築前に必要なため、
  * `process.env` から直接読む（シークレット名・スイッチであり秘密の実値ではない）。
+ * Google Chat 有効時は credentials の参照、外部取得時は poll token の参照も必須とする。
  *
  * @returns 構築済みの `SecretProvider`
  * @throws SecretConfigError gcp backend で `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` /
  *   `CHATWORK_WEBHOOK_TOKEN_SECRET` / `CHATWORK_API_TOKEN_SECRET` / `SLACK_BOT_TOKEN_SECRET` /
- *   `SLACK_SIGNING_SECRET_SECRET` が欠落している場合（キー名のみ保持）
+ *   `SLACK_SIGNING_SECRET_SECRET` または有効な Google Chat モードの参照が欠落した場合（キー名のみ保持）
  * @throws SecretAccessError gcp backend で Secret Manager アクセスに失敗した場合（`createGcpSecretProvider` 由来）
  */
 export async function createSecretProvider(): Promise<SecretProvider> {
@@ -87,9 +88,28 @@ export async function createSecretProvider(): Promise<SecretProvider> {
     throw new SecretConfigError(missingKeys);
   }
 
+  const googleChatEnabled =
+    process.env.GOOGLE_CHAT_ENABLED === "true" || process.env.GOOGLE_CHAT_ENABLED === "1";
+  const googleChatCredentialsSecret = process.env.GOOGLE_CHAT_CREDENTIALS_SECRET;
+  if (googleChatEnabled && !googleChatCredentialsSecret) {
+    throw new SecretConfigError(["GOOGLE_CHAT_CREDENTIALS_SECRET"]);
+  }
+
+  const externalPolling = googleChatEnabled && process.env.GOOGLE_CHAT_POLL_MODE === "external";
+  const googleChatPollTokenSecret = process.env.GOOGLE_CHAT_POLL_TOKEN_SECRET;
+  if (externalPolling && !googleChatPollTokenSecret) {
+    throw new SecretConfigError(["GOOGLE_CHAT_POLL_TOKEN_SECRET"]);
+  }
+
   return createGcpSecretProvider({
     projectId,
     secretNames: {
+      ...(externalPolling && googleChatPollTokenSecret
+        ? { GOOGLE_CHAT_POLL_TOKEN: googleChatPollTokenSecret }
+        : {}),
+      ...(googleChatEnabled && googleChatCredentialsSecret
+        ? { GOOGLE_CHAT_CREDENTIALS: googleChatCredentialsSecret }
+        : {}),
       DATABASE_URL: databaseUrlSecret,
       CHATWORK_WEBHOOK_TOKEN: chatworkWebhookTokenSecret,
       CHATWORK_API_TOKEN: chatworkApiTokenSecret,

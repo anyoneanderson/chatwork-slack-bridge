@@ -1,3 +1,7 @@
+/** 外部応答を保持せず、未送信と成否不明を区別する。 */
+export const SLACK_FAILURE_KINDS = ["rate_limited", "rejected", "unknown"] as const;
+export type SlackFailureKind = (typeof SLACK_FAILURE_KINDS)[number];
+
 declare const slackChannelIdBrand: unique symbol;
 declare const slackTsBrand: unique symbol;
 

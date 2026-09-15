@@ -1,11 +1,19 @@
 import { serve } from "@hono/node-server";
 
 import { createChatworkClient } from "@/adapters/chatwork/client";
+import { createGoogleChatClient } from "@/adapters/google-chat/client";
 import { createSecretProvider } from "@/adapters/secrets/factory";
 import type { SecretProvider } from "@/adapters/secrets/types";
 import { createSlackClient } from "@/adapters/slack/client";
 import { createApp } from "@/app/server";
+import { createGoogleChatBridge } from "@/app/services/google-chat/bridge";
+import { startGoogleChatPolling } from "@/app/services/google-chat-poll-runtime";
 import { type Config, ConfigError, loadConfig } from "@/config/env";
+import {
+  type GoogleChatConfig,
+  GoogleChatConfigError,
+  loadGoogleChatConfig,
+} from "@/config/google-chat";
 import { createDbClient } from "@/db/client";
 import { createLogger } from "@/logger";
 import { serializeError } from "@/serialize-error";
@@ -33,10 +41,17 @@ async function main(): Promise<void> {
   }
 
   let config: Config;
+  let googleConfig: GoogleChatConfig | undefined;
   try {
     config = loadConfig(secretProvider);
+    googleConfig = loadGoogleChatConfig(secretProvider);
   } catch (err) {
-    if (err instanceof ConfigError) {
+    if (err instanceof GoogleChatConfigError) {
+      bootstrapLogger.fatal(
+        { op: "google_chat.config_load", issues: err.issues },
+        "invalid config",
+      );
+    } else if (err instanceof ConfigError) {
       bootstrapLogger.fatal(
         { op: "config.load", issues: formatConfigIssues(err.issues) },
         "invalid config",
@@ -52,7 +67,34 @@ async function main(): Promise<void> {
   // 外部サービス client はアダプタ経由で生成し、トークンは secret adapter 由来の config から注入する。
   const chatworkClient = createChatworkClient({ apiToken: config.CHATWORK_API_TOKEN });
   const slackClient = createSlackClient({ botToken: config.SLACK_BOT_TOKEN });
-  const app = createApp({ db, config, logger, chatworkClient, slackClient });
+  const googleChatBridge = googleConfig
+    ? createGoogleChatBridge({
+        db,
+        config: googleConfig,
+        logger,
+        client: createGoogleChatClient(googleConfig),
+        slackClient: createSlackClient({ botToken: config.SLACK_BOT_TOKEN, retryDisabled: true }),
+      })
+    : undefined;
+  const googlePollRuntime =
+    googleChatBridge && googleConfig
+      ? startGoogleChatPolling(
+          (signal) => googleChatBridge.poll({ signal }),
+          { mode: googleConfig.pollMode, intervalMs: googleConfig.pollIntervalMs },
+          logger,
+        )
+      : undefined;
+  const app = createApp({
+    db,
+    config,
+    logger,
+    chatworkClient,
+    slackClient,
+    ...(googleChatBridge ? { googleChatBridge } : {}),
+    ...(googlePollRuntime && googleConfig?.pollMode === "external" && googleConfig.pollToken
+      ? { googleChatPoll: { runtime: googlePollRuntime, token: googleConfig.pollToken } }
+      : {}),
+  });
 
   const server = serve(
     {
@@ -74,11 +116,12 @@ async function main(): Promise<void> {
     logger.info({ op: "server.shutdown", signal }, "shutdown started");
 
     try {
+      const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()));
+      await googlePollRuntime?.stop();
+      await serverClosed;
       await db.close();
-      server.close(() => {
-        logger.info({ op: "server.shutdown", signal }, "shutdown completed");
-        process.exit(0);
-      });
+      logger.info({ op: "server.shutdown", signal }, "shutdown completed");
+      process.exit(0);
     } catch (err) {
       logger.error({ op: "server.shutdown", signal, err: serializeError(err) }, "shutdown failed");
       process.exit(1);

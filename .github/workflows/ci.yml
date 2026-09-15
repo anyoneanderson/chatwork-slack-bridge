@@ -11,6 +11,20 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-24.04
+    env:
+      GOOGLE_CHAT_TEST_DATABASE_URL: postgres://bridge:bridge-local-test@127.0.0.1:5432/bridge_test
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bridge
+          POSTGRES_PASSWORD: bridge-local-test
+          POSTGRES_DB: bridge_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bridge -d bridge_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
 
     steps:
       - name: Checkout

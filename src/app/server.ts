@@ -3,6 +3,8 @@ import { Hono } from "hono";
 import type { ChatworkClient } from "@/adapters/chatwork/client";
 import type { SlackClient } from "@/adapters/slack/client";
 import { createRoutes } from "@/app/routes/index";
+import type { GoogleChatBridge } from "@/app/services/google-chat/bridge";
+import type { GoogleChatPollRuntime } from "@/app/services/google-chat-poll-runtime";
 import type { Config } from "@/config/env";
 import type { DbClient } from "@/db/client";
 import type { Logger } from "@/logger";
@@ -25,6 +27,10 @@ export interface AppDeps {
   chatworkClient: ChatworkClient;
   /** Slack client（投稿）。 */
   slackClient: SlackClient;
+  /** 有効化された Google Chat 接続。未設定時は既存の Chatwork 経路のみ動作する。 */
+  googleChatBridge?: GoogleChatBridge;
+  /** 外部取得モードだけで有効にする認証付きの取得制御。 */
+  googleChatPoll?: { runtime: GoogleChatPollRuntime; token: string };
 }
 
 /**

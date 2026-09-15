@@ -71,7 +71,20 @@ export function createSlackEventsRoute(deps: AppDeps): Hono {
     }
 
     // event_callback。本フェーズは message イベントのみ処理する（スキーマで message に限定済み）。
-    await handleSlackReply({ ...envelope.event, channel: envelope.event.channel }, handleDeps);
+    let googleHandled: boolean | undefined;
+    try {
+      googleHandled = await deps.googleChatBridge?.handleReply(envelope.event);
+    } catch {
+      // 永続保存できたか不明なので Slack の再送を許し、別の送信先へは振り分けない。
+      deps.logger.error(
+        { op: "google_chat.slack_event", code: "processing_failed" },
+        "retry required",
+      );
+      return c.json({ error: "temporarily_unavailable" }, 503);
+    }
+    if (!googleHandled) {
+      await handleSlackReply({ ...envelope.event, channel: envelope.event.channel }, handleDeps);
+    }
     return c.json({ ok: true }, 200);
   });
 

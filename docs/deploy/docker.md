@@ -107,6 +107,10 @@ curl -i http://localhost:8080/health
 
 ### .env ファイルからの注入
 
+Google Chat は既定で無効。接続する場合は [Google Chat の接続・運用手順](../google-chat.md)の `GOOGLE_CHAT_*` を追加する。
+`env` backend では `GOOGLE_CHAT_CREDENTIALS` に OAuth JSON を注入する。既定の `GOOGLE_CHAT_POLL_MODE=timer` では、コンテナを継続稼働させる。
+既存の cron から実行する場合は `external` を選び、専用トークンを設定して認証付き HTTP を呼び出す。具体例は[取得の起動方法](../google-chat.md#取得の起動方法)を参照。
+
 多数の変数を渡す場合は `--env-file` も利用できます（`.env` はコミットしないこと）。
 
 ```bash

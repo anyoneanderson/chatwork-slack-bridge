@@ -1,4 +1,7 @@
 import { sql } from "drizzle-orm";
+
+export * from "@/db/google-chat-schema";
+
 import {
   bigint,
   boolean,

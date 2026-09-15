@@ -12,6 +12,10 @@ vi.mock("@/adapters/secrets/gcp-secret-provider", () => ({
 
 const ENV_KEYS = [
   "SECRET_BACKEND",
+  "GOOGLE_CHAT_ENABLED",
+  "GOOGLE_CHAT_POLL_MODE",
+  "GOOGLE_CHAT_POLL_TOKEN_SECRET",
+  "GOOGLE_CHAT_CREDENTIALS_SECRET",
   "GOOGLE_CLOUD_PROJECT",
   "DATABASE_URL_SECRET",
   "CHATWORK_WEBHOOK_TOKEN_SECRET",
@@ -184,5 +188,91 @@ describe("createSecretProvider", () => {
     // env backend は Secret Manager シークレット名を要求しない（非破壊）。
     expect(provider).toBeInstanceOf(EnvSecretProvider);
     expect(createGcpSecretProviderMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("Google Chat conditional Secret Manager configuration", () => {
+  it.each([
+    "true",
+    "1",
+  ])("requires a credentials secret reference when enabled=%s", async (enabled) => {
+    setAllGcpReferenceEnv();
+    process.env.GOOGLE_CHAT_ENABLED = enabled;
+    await expect(createSecretProvider()).rejects.toMatchObject({
+      missingKeys: ["GOOGLE_CHAT_CREDENTIALS_SECRET"],
+    });
+    expect(createGcpSecretProviderMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["true", "1"])("passes the credentials reference when enabled=%s", async (enabled) => {
+    setAllGcpReferenceEnv();
+    process.env.GOOGLE_CHAT_ENABLED = enabled;
+    process.env.GOOGLE_CHAT_CREDENTIALS_SECRET = "dummy-google-credentials-secret";
+    await createSecretProvider();
+    expect(createGcpSecretProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        secretNames: expect.objectContaining({
+          GOOGLE_CHAT_CREDENTIALS: "dummy-google-credentials-secret",
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    undefined,
+    "false",
+    "0",
+  ])("does not request Google credentials when enabled=%s", async (enabled) => {
+    setAllGcpReferenceEnv();
+    if (enabled !== undefined) process.env.GOOGLE_CHAT_ENABLED = enabled;
+    process.env.GOOGLE_CHAT_CREDENTIALS_SECRET = "unused-google-secret";
+    await createSecretProvider();
+    expect(createGcpSecretProviderMock).toHaveBeenCalledTimes(1);
+    expect(createGcpSecretProviderMock.mock.calls[0]?.[0].secretNames).not.toHaveProperty(
+      "GOOGLE_CHAT_CREDENTIALS",
+    );
+  });
+});
+
+describe("external poll Secret Manager configuration", () => {
+  it("requires the poll token reference only for enabled external polling", async () => {
+    setAllGcpReferenceEnv();
+    process.env.GOOGLE_CHAT_ENABLED = "true";
+    process.env.GOOGLE_CHAT_POLL_MODE = "external";
+    process.env.GOOGLE_CHAT_CREDENTIALS_SECRET = "dummy-google-credentials-secret";
+    await expect(createSecretProvider()).rejects.toMatchObject({
+      missingKeys: ["GOOGLE_CHAT_POLL_TOKEN_SECRET"],
+    });
+    expect(createGcpSecretProviderMock).not.toHaveBeenCalled();
+  });
+
+  it("passes the token reference to Secret Manager for external polling", async () => {
+    setAllGcpReferenceEnv();
+    process.env.GOOGLE_CHAT_ENABLED = "true";
+    process.env.GOOGLE_CHAT_POLL_MODE = "external";
+    process.env.GOOGLE_CHAT_CREDENTIALS_SECRET = "dummy-google-credentials-secret";
+    process.env.GOOGLE_CHAT_POLL_TOKEN_SECRET = "dummy-poll-token-secret";
+    await createSecretProvider();
+    expect(createGcpSecretProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        secretNames: expect.objectContaining({ GOOGLE_CHAT_POLL_TOKEN: "dummy-poll-token-secret" }),
+      }),
+    );
+  });
+
+  it.each([
+    ["false", "external"],
+    ["true", "timer"],
+    ["true", undefined],
+  ])("does not fetch a poll token for enabled=%s mode=%s", async (enabled, mode) => {
+    setAllGcpReferenceEnv();
+    process.env.GOOGLE_CHAT_ENABLED = enabled;
+    if (mode !== undefined) process.env.GOOGLE_CHAT_POLL_MODE = mode;
+    process.env.GOOGLE_CHAT_CREDENTIALS_SECRET = "dummy-google-credentials-secret";
+    process.env.GOOGLE_CHAT_POLL_TOKEN_SECRET = "unused-token-secret";
+    await createSecretProvider();
+    expect(createGcpSecretProviderMock.mock.calls[0]?.[0].secretNames).not.toHaveProperty(
+      "GOOGLE_CHAT_POLL_TOKEN",
+    );
   });
 });
