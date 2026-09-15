@@ -6,6 +6,8 @@ Chatwork のメッセージを Slack に集約し、Slack 上で内容確認・�
 Google Chat も任意で接続できる。ユーザー OAuth で指定した1スペースの新着テキストを取得し、Slack のスレッドへ転送する。返信には Slack 上の送信確認が必要。
 Google Chat 連携は既定で無効。実サービス間の返信テストは未完了のため、有効化前に[検証手順](docs/google-chat.md)を実施する。
 
+取得の起動方法は、Docker 向けのアプリ内タイマーと、cron などからの認証付き HTTP 呼び出しを選べます。Cloud Run 用ワークフローでは Cloud Scheduler から呼び出し、常時 CPU 割り当てを使いません。
+
 ## 構成
 
 ```text

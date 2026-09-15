@@ -67,6 +67,12 @@ gcloud services enable \
   --project="<PROJECT_ID>"
 ```
 
+Google Chat を有効にする場合は、前項の API に加えて Scheduler API を有効にする。
+
+```bash
+gcloud services enable cloudscheduler.googleapis.com --project="<PROJECT_ID>"
+```
+
 ### 1.2 Artifact Registry リポジトリの作成
 
 ```bash
@@ -110,6 +116,8 @@ gcloud iam service-accounts create "<runtime-sa-id>" \
 | `roles/artifactregistry.writer` | イメージの push |
 | `roles/secretmanager.secretAccessor` | migration 時に `DATABASE_URL` を取得（`gcloud secrets versions access`） |
 | `roles/iam.serviceAccountUser`（実行 SA に対して） | deploy 時に実行 SA を Cloud Run へ割り当てる |
+| `roles/cloudscheduler.admin`（Google Chat 使用時） | 取得ジョブの作成、更新、停止 |
+| `roles/serviceusage.serviceUsageViewer`（Google Chat 使用時） | Scheduler API の有効状態を事前確認 |
 
 ```bash
 for role in roles/run.admin roles/artifactregistry.writer roles/secretmanager.secretAccessor; do
@@ -123,6 +131,15 @@ gcloud iam service-accounts add-iam-policy-binding "<RUNTIME_SA_EMAIL>" \
   --member="serviceAccount:<DEPLOY_SA_EMAIL>" \
   --role="roles/iam.serviceAccountUser" \
   --project="<PROJECT_ID>"
+```
+
+Google Chat を有効にする場合は、デプロイ SA に次も付与する。
+
+```bash
+for role in roles/cloudscheduler.admin roles/serviceusage.serviceUsageViewer; do
+  gcloud projects add-iam-policy-binding "<PROJECT_ID>" \
+    --member="serviceAccount:<DEPLOY_SA_EMAIL>" --role="${role}"
+done
 ```
 
 ### 1.4 実行 SA への `roles/secretmanager.secretAccessor` 付与（必須）
@@ -148,7 +165,21 @@ done
 ```
 
 > この権限が無いと Cloud Run 起動時の secret プリフェッチが失敗し、`/health` も 200 を返さない（デプロイが失敗扱いになる）。
-> 5 シークレットのいずれか 1 つでもアクセス不可だと gcp factory が `SecretAccessError` で起動を中断する。
+
+Google Chat 使用時は、先に §3.2 の OAuth JSON と取得トークンの登録を済ませてから、次の権限付与を実行する。
+取得トークンは Scheduler のヘッダー設定に使うため、デプロイ SA も読み取れるようにする。
+
+```bash
+for secret in "<GOOGLE_CHAT_CREDENTIALS_SECRET_NAME>" "<GOOGLE_CHAT_POLL_TOKEN_SECRET_NAME>"; do
+  gcloud secrets add-iam-policy-binding "${secret}" \
+    --member="serviceAccount:<RUNTIME_SA_EMAIL>" \
+    --role=roles/secretmanager.secretAccessor --project="<PROJECT_ID>"
+done
+gcloud secrets add-iam-policy-binding "<GOOGLE_CHAT_POLL_TOKEN_SECRET_NAME>" \
+  --member="serviceAccount:<DEPLOY_SA_EMAIL>" \
+  --role=roles/secretmanager.secretAccessor --project="<PROJECT_ID>"
+```
+> 読み込み対象のシークレットが1つでもアクセス不可なら起動を中断する。Cloud Run で Google Chat が有効な場合は既存の5件に2件を追加して取得する。
 
 ## 2. Workload Identity Federation（WIF）の設定
 
@@ -235,6 +266,20 @@ printf '%s' '<SLACK_SIGNING_SECRET_VALUE>'   | gcloud secrets versions add "<SLA
 
 > 実行 SA への `secretAccessor` 付与は [1.4 章](#14-実行-sa-への-rolessecretmanagersecretaccessor-付与必須)のループに含まれている。
 
+### 3.2 Google Chat の認証情報（使用時のみ）
+
+OAuth JSON は[Google Chat の手順](../google-chat.md)に従って登録する。
+取得用トークンは、Node.js 22 の暗号学的乱数から改行なしの base64url 形式で生成し、そのまま Secret Manager へ渡す。実値は画面と履歴へ出さない。
+
+```bash
+node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))' \
+  | gcloud secrets create "<GOOGLE_CHAT_POLL_TOKEN_SECRET_NAME>" \
+      --replication-policy=automatic --data-file=- --project="<PROJECT_ID>"
+```
+
+通常の base64 に含まれる `+`、`/`、`=` と末尾の改行は受け付けない。
+トークン更新時は[停止を伴う更新手順](../google-chat.md#cloud-run-と-cloud-scheduler)を使う。
+
 ## 4. 必要な GitHub repository variables 一覧
 
 リポジトリの **Settings → Secrets and variables → Actions → Variables**（repository variables）に以下を設定する。この表の項目は **Variables** に置く（参照情報・スイッチのため）。Google Chat の追加設定では、一部を Secrets に置く（§5）。秘密の実値（`DATABASE_URL`）は GitHub には置かず、Secret Manager に保管する。
@@ -255,6 +300,12 @@ printf '%s' '<SLACK_SIGNING_SECRET_VALUE>'   | gcloud secrets versions add "<SLA
 | `SLACK_DEFAULT_GROUP_CHANNEL_ID` | group 集約フォールバック Slack チャンネル ID（非秘密の設定値） | `<SLACK_DEFAULT_GROUP_CHANNEL_ID>` |
 | `SLACK_DEFAULT_DM_CHANNEL_ID` | direct 集約フォールバック Slack チャンネル ID（非秘密の設定値） | `<SLACK_DEFAULT_DM_CHANNEL_ID>` |
 | `SLACK_ALLOWED_REPLY_USER_IDS` | 送信操作の allowlist（**任意**・カンマ区切りの Slack user ID。非秘密の設定値。未設定＝本人のみ許可） | `<SLACK_ALLOWED_REPLY_USER_IDS>` |
+| `GOOGLE_CHAT_ENABLED` | Google Chat の有効化。未設定なら無効 | `false` |
+| `GOOGLE_CHAT_CREDENTIALS_SECRET` | OAuth JSON の参照名（有効時必須） | `<GOOGLE_CHAT_CREDENTIALS_SECRET_NAME>` |
+| `GOOGLE_CHAT_POLL_TOKEN_SECRET` | 取得トークンの参照名（有効時必須。無効化時はジョブ停止まで残す） | `<GOOGLE_CHAT_POLL_TOKEN_SECRET_NAME>` |
+| `GOOGLE_CHAT_START_TIME` | 初回取得開始時刻（有効時必須） | `2026-09-15T00:00:00Z` |
+| `GOOGLE_CHAT_SCHEDULE` | Scheduler の5フィールド cron 式。時刻は UTC。月名と曜日名は英大文字 | `* * * * *` |
+| `GOOGLE_CHAT_POLL_INTERVAL_MS` | タイマー方式用。Cloud Run の外部起動間隔には使わない | `60000` |
 
 > `*_SECRET` 変数は Secret Manager の**シークレット名**であり実値ではない。トークン / signing secret の実値は Secret Manager に保管し、アプリが実行時に取得する（`DATABASE_URL` と同じ間接参照）。`SLACK_DEFAULT_*_CHANNEL_ID` / `SLACK_ALLOWED_REPLY_USER_IDS` は秘密ではないため値そのものを variable に置く（`SLACK_ALLOWED_REPLY_USER_IDS` は任意。未設定でも可）。
 >
@@ -268,21 +319,26 @@ printf '%s' '<SLACK_SIGNING_SECRET_VALUE>'   | gcloud secrets versions add "<SLA
 
 Google Chat を接続する場合は、[専用手順](../google-chat.md)に従って OAuth JSON を Secret Manager に登録し、実行 SA にそのシークレットの読取権限を付与する。
 同手順に従ってスイッチと参照名を repository variables、アカウント・接続先を repository secrets に追加する。OAuth JSON の実値は Secret Manager に保存する。
-`GOOGLE_CHAT_ENABLED` 未設定時は無効。`true` または `1` のとき、ワークフローは定期取得を継続するため最小インスタンス数を1、CPUを常時割当にする。
-リクエスト待機中もインスタンスが稼働するため、既存の最小0・リクエスト時CPU割当の構成より課金対象が増える。
-無効時のデプロイでは最小0・リクエスト時CPU割当に戻す。
+`GOOGLE_CHAT_ENABLED` 未設定時は無効。有効時も最小0インスタンス、リクエスト時CPU割り当てを維持する。
+ワークフローは `GOOGLE_CHAT_POLL_MODE=external` を設定し、Cloud Scheduler から認証付き HTTP で定期取得を呼び出す。
+有効化前に Cloud Scheduler API と専用トークン、実行 SA とデプロイ SA の権限を[取得の起動方法](../google-chat.md#取得の起動方法)に従って準備する。
+`GOOGLE_CHAT_POLL_TOKEN_SECRET` を repository variable に追加する。間隔は `GOOGLE_CHAT_SCHEDULE` で指定でき、既定は毎分。
+Scheduler を管理するデプロイ SA には、API の有効状態を確認する `roles/serviceusage.serviceUsageViewer` も必要。
+Google Chat を無効にするときは、既存ジョブの停止が完了するまで `GOOGLE_CHAT_POLL_TOKEN_SECRET` の variable を残す。Google Chat を導入しておらず参照名も未設定の場合は、Scheduler の操作をスキップする。
 
 `main` への push（マージ）または **`main` ブランチに対する** 手動 `workflow_dispatch` で [`deploy-cloud-run.yml`](../../.github/workflows/deploy-cloud-run.yml) が起動する。deploy ジョブは `github.ref == 'refs/heads/main'` に固定されているため、feature ブランチを選んで `workflow_dispatch` しても deploy は実行されない（`quality-gate` のみ）。PR でも `quality-gate` のみ実行され、deploy は行われない。
 
 1. **quality-gate**: `pnpm install --frozen-lockfile` → `pnpm lint` → `pnpm typecheck` → `pnpm test --coverage`。
 2. **deploy**（`quality-gate` 成功後、`github.ref == 'refs/heads/main'`（push / dispatch）かつ upstream リポジトリのときのみ）:
    1. WIF で `<DEPLOY_SA_EMAIL>` を impersonate（`google-github-actions/auth@v2`）。
-   2. Secret Manager から `DATABASE_URL` を一時取得し、取得直後に `::add-mask::` でマスクして `pnpm db:migrate`（drizzle-kit migrate は冪等）。
-   3. `docker buildx` でイメージを build し、Artifact Registry へ **git SHA タグ**（+ `latest`）で push。
-   4. **Trivy** で CRITICAL/HIGH 脆弱性をスキャン（検出時は deploy を中断、`ignore-unfixed`）。
-   5. `gcloud run deploy <SERVICE_NAME> --image <SHA タグ>` で deploy。実行 SA = `CLOUD_RUN_SERVICE_ACCOUNT`、`--port 8080`、`--min-instances 0 --max-instances 3 --cpu 1 --memory 512Mi`。
-   6. `/health` が **200** を返すことを検証（Neon 疎通の成功判定）。
-   7. デプロイサマリ（Service URL / Revision / Image）を出力。
+   2. Scheduler API、ジョブ一覧参照、取得トークンと cron 式を事前検査する。Google Chat 無効かつトークン参照名が未設定の環境ではスキップする。
+   3. Secret Manager から `DATABASE_URL` を一時取得し、取得直後に `::add-mask::` でマスクして `pnpm db:migrate`（drizzle-kit migrate は冪等）。
+   4. `docker buildx` でイメージを build し、Artifact Registry へ **git SHA タグ**（+ `latest`）で push。
+   5. **Trivy** で CRITICAL/HIGH 脆弱性をスキャン（検出時は deploy を中断、`ignore-unfixed`）。
+   6. `gcloud run deploy <SERVICE_NAME> --image <SHA タグ>` で deploy。実行 SA = `CLOUD_RUN_SERVICE_ACCOUNT`、`--port 8080`、`--min-instances 0 --max-instances 3 --cpu 1 --memory 512Mi --cpu-throttling --timeout 300s`。
+   7. `/health` が **200** を返すことを検証（Neon 疎通の成功判定）。
+   8. Google Chat 有効時は Scheduler ジョブを作成または更新し、無効時は既存ジョブを停止する。
+   9. デプロイサマリ（Service URL / Revision / Image）を出力。
 
 deploy 時の `--set-env-vars`（秘密の実値は含めない。参照情報・スイッチのみ）:
 
@@ -293,6 +349,9 @@ deploy 時の `--set-env-vars`（秘密の実値は含めない。参照情報�
 | `GOOGLE_CLOUD_PROJECT` | `<PROJECT_ID>` | Secret Manager 参照先プロジェクト |
 | `DATABASE_URL_SECRET` | `<DB_URL_SECRET_NAME>` | 取得対象のシークレット名 |
 | `DB_POOLED` | `true` | Neon pooled 接続（`prepare:false`） |
+| `GOOGLE_CHAT_POLL_MODE` | `external` | 認証付き HTTP から取得する |
+| `GOOGLE_CHAT_POLL_TOKEN_SECRET` | `<GOOGLE_CHAT_POLL_TOKEN_SECRET_NAME>` | 取得トークンの参照名 |
+| その他の `GOOGLE_CHAT_*` | [Google Chat 設定一覧](../google-chat.md#設定)を参照 | 有効化、OAuth、接続先、取得開始時刻、返信許可 |
 | `CHATWORK_WEBHOOK_TOKEN_SECRET` | `<CHATWORK_WEBHOOK_TOKEN_SECRET_NAME>` | Chatwork Webhook トークンのシークレット名 |
 | `CHATWORK_API_TOKEN_SECRET` | `<CHATWORK_API_TOKEN_SECRET_NAME>` | Chatwork API トークンのシークレット名 |
 | `SLACK_BOT_TOKEN_SECRET` | `<SLACK_BOT_TOKEN_SECRET_NAME>` | Slack Bot トークンのシークレット名 |
@@ -378,14 +437,15 @@ DB をリストアした場合の流れ:
 
 > **DR チェックリスト（運用前に一度確認）**: (a) Neon の retention 期間が要件を満たす / (b) PITR で任意時点に戻せることをステージングで一度試す / (c) branch リストア → 接続文字列差し替え → `/health` 200 の手順を通しで確認 / (d) Secret Manager のシークレット更新権限と Cloud Run の再デプロイ権限を運用担当が持つ。
 
-## 9. T009 workflow との整合（チェックリスト）
+## 9. デプロイ前の確認
 
-本ドキュメントの記述は [`deploy-cloud-run.yml`](../../.github/workflows/deploy-cloud-run.yml)（実装の正）と一致している:
+[ワークフロー](../../.github/workflows/deploy-cloud-run.yml)を実行する前に、対象環境で次を確認する。
 
-- [x] 変数名 14 件（`GCP_WORKLOAD_IDENTITY_PROVIDER` / `GCP_DEPLOY_SERVICE_ACCOUNT` / `GCP_PROJECT_ID` / `ARTIFACT_REGISTRY_REPOSITORY` / `CLOUD_RUN_SERVICE` / `CLOUD_RUN_SERVICE_ACCOUNT` / `DATABASE_URL_SECRET` / `CHATWORK_WEBHOOK_TOKEN_SECRET` / `CHATWORK_API_TOKEN_SECRET` / `SLACK_BOT_TOKEN_SECRET` / `SLACK_SIGNING_SECRET_SECRET` / `SLACK_DEFAULT_GROUP_CHANNEL_ID` / `SLACK_DEFAULT_DM_CHANNEL_ID` / `SLACK_ALLOWED_REPLY_USER_IDS`）が workflow の `vars.*` と一致（`SLACK_ALLOWED_REPLY_USER_IDS` は任意）。
-- [x] リージョンは `asia-northeast1`（`env.GAR_REGION` / `env.CLOUD_RUN_REGION`）。
-- [x] イメージ URI 形式（`<region>-docker.pkg.dev/<PROJECT_ID>/<AR_REPO>/<SERVICE_NAME>:<SHA>`）が `Compute image metadata` ステップと一致。
-- [x] `--set-env-vars`（`NODE_ENV` / `SECRET_BACKEND=gcp` / `GOOGLE_CLOUD_PROJECT` / `DATABASE_URL_SECRET` / `DB_POOLED=true` / `CHATWORK_WEBHOOK_TOKEN_SECRET` / `CHATWORK_API_TOKEN_SECRET` / `SLACK_BOT_TOKEN_SECRET` / `SLACK_SIGNING_SECRET_SECRET` / `SLACK_DEFAULT_GROUP_CHANNEL_ID` / `SLACK_DEFAULT_DM_CHANNEL_ID` / `SLACK_ALLOWED_REPLY_USER_IDS`）が `Deploy to Cloud Run` ステップと一致。トークン / signing secret の秘密の実値（`DATABASE_URL` / `*_TOKEN` / `SLACK_SIGNING_SECRET`）は注入せず、シークレット名のみを渡す。`SLACK_ALLOWED_REPLY_USER_IDS` は任意（未設定なら空文字＝本人のみ許可）。
-- [x] リソース制限（`--port 8080` / `--min-instances 0` / `--max-instances 3` / `--cpu 1` / `--memory 512Mi`）が一致。
-- [x] 実行 SA（`CLOUD_RUN_SERVICE_ACCOUNT`）への `roles/secretmanager.secretAccessor` を、`DATABASE_URL` + 3 トークンシークレット + Slack Signing Secret の 5 件について必須として記載。
-- [x] `/health` 200 検証・SHA タグ・Trivy スキャン・`::add-mask::` による migration 時のマスクを記載。
+- §4 の variables と Google Chat 接続先の secrets を登録した。秘密の実値は Secret Manager に保存した。
+- リージョンは `asia-northeast1`、イメージはコミット SHA のタグを使う。
+- Cloud Run は最小0台、最大3台、1 CPU、512 MiB、リクエスト時 CPU 割り当て、HTTP タイムアウト300秒とする。
+- 実行 SA は既存の5シークレットと、有効時の Google Chat OAuth JSON、取得トークンを読み取れる。
+- Google Chat 使用時は、Scheduler API とデプロイ SA の Scheduler 管理権限、API 一覧参照権限、取得トークン参照権限を準備した。
+- Scheduler の事前検査、ヘルスチェック、ジョブの作成または更新が成功したかを確認する。事前検査は書き込み権限の保証ではない。
+- Google Chat の無効化では、トークン参照名を残した状態でデプロイしてジョブの停止を確認する。
+- 実呼び出しによる取得と、確認付き返信は専用の検証先で確認する。ヘルスチェックだけでは両者の成功を判定しない。

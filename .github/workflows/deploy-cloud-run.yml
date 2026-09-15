@@ -113,6 +113,19 @@ jobs:
       - name: Install dependencies (for Drizzle migrate)
         run: pnpm install --frozen-lockfile
 
+      - name: Check Google Chat schedule prerequisites
+        if: >-
+          vars.GOOGLE_CHAT_ENABLED == 'true' ||
+          vars.GOOGLE_CHAT_ENABLED == '1' ||
+          vars.GOOGLE_CHAT_POLL_TOKEN_SECRET != ''
+        env:
+          APP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          APP_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+          GOOGLE_CHAT_ENABLED: ${{ vars.GOOGLE_CHAT_ENABLED || 'false' }}
+          GOOGLE_CHAT_POLL_TOKEN_SECRET: ${{ vars.GOOGLE_CHAT_POLL_TOKEN_SECRET }}
+          GOOGLE_CHAT_SCHEDULE: ${{ vars.GOOGLE_CHAT_SCHEDULE || '* * * * *' }}
+        run: node scripts/configure-google-chat-scheduler.mjs --check
+
       - name: Apply migrations to production DB
         env:
           DATABASE_URL_SECRET: ${{ vars.DATABASE_URL_SECRET }}
@@ -198,6 +211,7 @@ jobs:
           SLACK_ALLOWED_REPLY_USER_IDS: ${{ vars.SLACK_ALLOWED_REPLY_USER_IDS }}
           GOOGLE_CHAT_ENABLED: ${{ vars.GOOGLE_CHAT_ENABLED || 'false' }}
           GOOGLE_CHAT_CREDENTIALS_SECRET: ${{ vars.GOOGLE_CHAT_CREDENTIALS_SECRET }}
+          GOOGLE_CHAT_POLL_TOKEN_SECRET: ${{ vars.GOOGLE_CHAT_POLL_TOKEN_SECRET }}
           # 接続先・氏名は公開 Actions ログに出さないため GitHub Secrets でマスクする。
           GOOGLE_CHAT_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_CHAT_ACCOUNT_EMAIL }}
           GOOGLE_CHAT_SPACE_NAME: ${{ secrets.GOOGLE_CHAT_SPACE_NAME }}
@@ -212,12 +226,7 @@ jobs:
           # DATABASE_URL / *_TOKEN (秘密の実値) は --update-secrets で注入しない。
           # アプリが Secret Manager adapter (SECRET_BACKEND=gcp) 経由で実行時に取得する設計。
           # --set-env-vars には参照情報 (シークレット名)・スイッチ・非秘密の設定値 (チャンネル ID) のみを渡す。
-          google_runtime=(--min-instances 0 --cpu-throttling)
-          if [[ "${GOOGLE_CHAT_ENABLED}" == "true" || "${GOOGLE_CHAT_ENABLED}" == "1" ]]; then
-            # バックグラウンド取得には常時 CPU と少なくとも1インスタンスが必要。
-            google_runtime=(--min-instances 1 --no-cpu-throttling)
-          fi
-          for key in GOOGLE_CHAT_ENABLED GOOGLE_CHAT_CREDENTIALS_SECRET GOOGLE_CHAT_ACCOUNT_EMAIL GOOGLE_CHAT_SPACE_NAME GOOGLE_CHAT_SPACE_DISPLAY_NAME GOOGLE_CHAT_SLACK_CHANNEL_ID GOOGLE_CHAT_START_TIME GOOGLE_CHAT_POLL_INTERVAL_MS GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS; do
+          for key in GOOGLE_CHAT_ENABLED GOOGLE_CHAT_CREDENTIALS_SECRET GOOGLE_CHAT_POLL_TOKEN_SECRET GOOGLE_CHAT_ACCOUNT_EMAIL GOOGLE_CHAT_SPACE_NAME GOOGLE_CHAT_SPACE_DISPLAY_NAME GOOGLE_CHAT_SLACK_CHANNEL_ID GOOGLE_CHAT_START_TIME GOOGLE_CHAT_POLL_INTERVAL_MS GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS; do
             if [[ "${!key}" == *"@@"* ]]; then
               echo "::error::Invalid Google Chat configuration delimiter"
               exit 1
@@ -230,11 +239,13 @@ jobs:
             --allow-unauthenticated \
             --service-account "${APP_SERVICE_ACCOUNT}" \
             --port 8080 \
-            "${google_runtime[@]}" \
+            --min-instances 0 \
+            --cpu-throttling \
+            --timeout 300s \
             --max-instances 3 \
             --cpu 1 \
             --memory 512Mi \
-            --set-env-vars "^@@^NODE_ENV=production@@SECRET_BACKEND=gcp@@GOOGLE_CLOUD_PROJECT=${APP_PROJECT_ID}@@DATABASE_URL_SECRET=${DATABASE_URL_SECRET}@@DB_POOLED=true@@CHATWORK_WEBHOOK_TOKEN_SECRET=${CHATWORK_WEBHOOK_TOKEN_SECRET}@@CHATWORK_API_TOKEN_SECRET=${CHATWORK_API_TOKEN_SECRET}@@SLACK_BOT_TOKEN_SECRET=${SLACK_BOT_TOKEN_SECRET}@@SLACK_SIGNING_SECRET_SECRET=${SLACK_SIGNING_SECRET_SECRET}@@SLACK_DEFAULT_GROUP_CHANNEL_ID=${SLACK_DEFAULT_GROUP_CHANNEL_ID}@@SLACK_DEFAULT_DM_CHANNEL_ID=${SLACK_DEFAULT_DM_CHANNEL_ID}@@SLACK_ALLOWED_REPLY_USER_IDS=${SLACK_ALLOWED_REPLY_USER_IDS}@@GOOGLE_CHAT_ENABLED=${GOOGLE_CHAT_ENABLED}@@GOOGLE_CHAT_CREDENTIALS_SECRET=${GOOGLE_CHAT_CREDENTIALS_SECRET}@@GOOGLE_CHAT_ACCOUNT_EMAIL=${GOOGLE_CHAT_ACCOUNT_EMAIL}@@GOOGLE_CHAT_SPACE_NAME=${GOOGLE_CHAT_SPACE_NAME}@@GOOGLE_CHAT_SPACE_DISPLAY_NAME=${GOOGLE_CHAT_SPACE_DISPLAY_NAME}@@GOOGLE_CHAT_SLACK_CHANNEL_ID=${GOOGLE_CHAT_SLACK_CHANNEL_ID}@@GOOGLE_CHAT_START_TIME=${GOOGLE_CHAT_START_TIME}@@GOOGLE_CHAT_POLL_INTERVAL_MS=${GOOGLE_CHAT_POLL_INTERVAL_MS}@@GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS=${GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS}" \
+            --set-env-vars "^@@^NODE_ENV=production@@SECRET_BACKEND=gcp@@GOOGLE_CLOUD_PROJECT=${APP_PROJECT_ID}@@DATABASE_URL_SECRET=${DATABASE_URL_SECRET}@@DB_POOLED=true@@CHATWORK_WEBHOOK_TOKEN_SECRET=${CHATWORK_WEBHOOK_TOKEN_SECRET}@@CHATWORK_API_TOKEN_SECRET=${CHATWORK_API_TOKEN_SECRET}@@SLACK_BOT_TOKEN_SECRET=${SLACK_BOT_TOKEN_SECRET}@@SLACK_SIGNING_SECRET_SECRET=${SLACK_SIGNING_SECRET_SECRET}@@SLACK_DEFAULT_GROUP_CHANNEL_ID=${SLACK_DEFAULT_GROUP_CHANNEL_ID}@@SLACK_DEFAULT_DM_CHANNEL_ID=${SLACK_DEFAULT_DM_CHANNEL_ID}@@SLACK_ALLOWED_REPLY_USER_IDS=${SLACK_ALLOWED_REPLY_USER_IDS}@@GOOGLE_CHAT_ENABLED=${GOOGLE_CHAT_ENABLED}@@GOOGLE_CHAT_POLL_MODE=external@@GOOGLE_CHAT_POLL_TOKEN_SECRET=${GOOGLE_CHAT_POLL_TOKEN_SECRET}@@GOOGLE_CHAT_CREDENTIALS_SECRET=${GOOGLE_CHAT_CREDENTIALS_SECRET}@@GOOGLE_CHAT_ACCOUNT_EMAIL=${GOOGLE_CHAT_ACCOUNT_EMAIL}@@GOOGLE_CHAT_SPACE_NAME=${GOOGLE_CHAT_SPACE_NAME}@@GOOGLE_CHAT_SPACE_DISPLAY_NAME=${GOOGLE_CHAT_SPACE_DISPLAY_NAME}@@GOOGLE_CHAT_SLACK_CHANNEL_ID=${GOOGLE_CHAT_SLACK_CHANNEL_ID}@@GOOGLE_CHAT_START_TIME=${GOOGLE_CHAT_START_TIME}@@GOOGLE_CHAT_POLL_INTERVAL_MS=${GOOGLE_CHAT_POLL_INTERVAL_MS}@@GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS=${GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS}" \
             --labels "commit-sha=${GITHUB_SHA::12},managed-by=github-actions" \
             --quiet
 
@@ -258,6 +269,20 @@ jobs:
             echo "::error::/health returned HTTP ${code} (expected 200)"
             exit 1
           fi
+
+      - name: Configure Google Chat schedule
+        if: >-
+          vars.GOOGLE_CHAT_ENABLED == 'true' ||
+          vars.GOOGLE_CHAT_ENABLED == '1' ||
+          vars.GOOGLE_CHAT_POLL_TOKEN_SECRET != ''
+        env:
+          APP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          APP_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+          GOOGLE_CHAT_ENABLED: ${{ vars.GOOGLE_CHAT_ENABLED || 'false' }}
+          GOOGLE_CHAT_POLL_TOKEN_SECRET: ${{ vars.GOOGLE_CHAT_POLL_TOKEN_SECRET }}
+          GOOGLE_CHAT_SCHEDULE: ${{ vars.GOOGLE_CHAT_SCHEDULE || '* * * * *' }}
+        run: node scripts/configure-google-chat-scheduler.mjs
 
       - name: Publish deployment summary
         run: |

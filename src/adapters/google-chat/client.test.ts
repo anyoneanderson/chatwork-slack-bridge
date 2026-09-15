@@ -10,6 +10,7 @@ const CONFIG: GoogleChatConfig = {
   slackChannelId: "C0DUMMY",
   startTime: "2026-01-01T00:00:00Z",
   pollIntervalMs: 60000,
+  pollMode: "timer",
   allowedReplyUserIds: [],
   credentials: {
     clientId: "dummy-client",

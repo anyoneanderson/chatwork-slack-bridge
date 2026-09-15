@@ -336,3 +336,58 @@ describe("Google Chat Secret Manager credentials", () => {
     expect(accessSecretVersionMock).toHaveBeenCalledTimes(8);
   });
 });
+
+describe("Google Chat invocation Secret Manager token", () => {
+  const tokenName = "dummy-poll-token-secret";
+  const tokenValue = "dummy-private-poll-token-".repeat(2);
+
+  it("caches the referenced token and never substitutes an environment value", async () => {
+    vi.stubEnv("GOOGLE_CHAT_POLL_TOKEN", "dummy-env-token");
+    accessSecretVersionMock.mockImplementation((req: { name: string }) => {
+      if (req.name.includes(`/secrets/${tokenName}/`))
+        return Promise.resolve(secretVersionResponse(tokenValue));
+      const key = PREFETCHED_KEYS.find((entry) =>
+        req.name.includes(`/secrets/${SECRET_NAMES[entry]}/`),
+      );
+      if (!key) throw new Error("unexpected secret name");
+      return Promise.resolve(secretVersionResponse(SECRET_VALUES[key]));
+    });
+    const provider = await createGcpSecretProvider({
+      ...buildOptions(),
+      secretNames: { ...SECRET_NAMES, GOOGLE_CHAT_POLL_TOKEN: tokenName },
+    });
+    expect(provider.get("GOOGLE_CHAT_POLL_TOKEN")).toBe(tokenValue);
+    expect(provider.get("GOOGLE_CHAT_POLL_TOKEN")).toBe(tokenValue);
+    expect(accessSecretVersionMock).toHaveBeenCalledTimes(6);
+    expect(accessSecretVersionMock).toHaveBeenCalledWith({
+      name: `projects/${PROJECT_ID}/secrets/${tokenName}/versions/latest`,
+    });
+  });
+
+  it("does not fall back to an environment token when no reference is provided", async () => {
+    vi.stubEnv("GOOGLE_CHAT_POLL_TOKEN", "dummy-env-token");
+    mockAllSecretsResolve();
+    const provider = await createGcpSecretProvider(buildOptions());
+    expect(provider.get("GOOGLE_CHAT_POLL_TOKEN")).toBeUndefined();
+    expect(accessSecretVersionMock).toHaveBeenCalledTimes(5);
+  });
+
+  it("fails closed on an empty token payload despite an environment token", async () => {
+    vi.stubEnv("GOOGLE_CHAT_POLL_TOKEN", "dummy-env-token");
+    accessSecretVersionMock.mockImplementation((req: { name: string }) => {
+      if (req.name.includes(`/secrets/${tokenName}/`))
+        return Promise.resolve(secretVersionResponse(""));
+      const key = PREFETCHED_KEYS.find((entry) =>
+        req.name.includes(`/secrets/${SECRET_NAMES[entry]}/`),
+      );
+      if (!key) throw new Error("unexpected secret name");
+      return Promise.resolve(secretVersionResponse(SECRET_VALUES[key]));
+    });
+    await expect(
+      createGcpSecretProvider({
+        ...buildOptions(),
+        secretNames: { ...SECRET_NAMES, GOOGLE_CHAT_POLL_TOKEN: tokenName },
+      }),
+    ).rejects.toMatchObject({ key: "GOOGLE_CHAT_POLL_TOKEN" });
+  });
+});

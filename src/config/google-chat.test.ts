@@ -100,6 +100,7 @@ describe("loadGoogleChatConfig", () => {
       slackChannelId: "C0DUMMYCHAT",
       startTime: "2026-01-01T00:00:00Z",
       pollIntervalMs: 60000,
+      pollMode: "timer",
       allowedReplyUserIds: ["U0DUMMY", "W0DUMMY"],
       credentials: {
         clientId: "dummy-client",
@@ -188,5 +189,64 @@ describe("Google Chat configuration diagnostics", () => {
       issues: [{ field: "GOOGLE_CHAT_CREDENTIALS", code: expect.any(String) }],
     });
     expect(JSON.stringify(failure)).not.toContain("PRIVATE_");
+  });
+});
+
+describe("Google Chat polling mode", () => {
+  const token = "dummy-poll-token-".repeat(3);
+
+  it("defaults to the portable timer without requiring an invocation token", () => {
+    expect(loadGoogleChatConfig(provider(VALID))).toMatchObject({ pollMode: "timer" });
+  });
+
+  it.each([
+    "",
+    "invalid stale placeholder",
+  ])("ignores unused token placeholders in timer mode", (value) => {
+    const secrets = provider({ ...VALID, GOOGLE_CHAT_POLL_TOKEN: value });
+    expect(loadGoogleChatConfig(secrets)).toMatchObject({ pollMode: "timer" });
+    expect(secrets.get).not.toHaveBeenCalledWith("GOOGLE_CHAT_POLL_TOKEN");
+  });
+
+  it("loads the external invocation token through the secret provider", () => {
+    const secrets = provider({
+      ...VALID,
+      GOOGLE_CHAT_POLL_MODE: "external",
+      GOOGLE_CHAT_POLL_TOKEN: token,
+    });
+    expect(loadGoogleChatConfig(secrets)).toMatchObject({ pollMode: "external", pollToken: token });
+    expect(secrets.get).toHaveBeenCalledWith("GOOGLE_CHAT_POLL_TOKEN");
+  });
+
+  it.each([
+    undefined,
+    "",
+    "short",
+    "x".repeat(257),
+    "private token ".repeat(4),
+    "秘密".repeat(32),
+  ])("rejects external mode with an unusable token without exposing its value", (value) => {
+    let failure: unknown;
+    try {
+      loadGoogleChatConfig(
+        provider({ ...VALID, GOOGLE_CHAT_POLL_MODE: "external", GOOGLE_CHAT_POLL_TOKEN: value }),
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(GoogleChatConfigError);
+    expect(failure).toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({ field: "GOOGLE_CHAT_POLL_TOKEN" }),
+      ]),
+    });
+    expect(JSON.stringify(failure)).not.toContain("private token");
+    expect(JSON.stringify(failure)).not.toContain("dummy-secret");
+  });
+
+  it("rejects an unknown mode instead of starting a timer accidentally", () => {
+    expect(() =>
+      loadGoogleChatConfig(provider({ ...VALID, GOOGLE_CHAT_POLL_MODE: "cron" })),
+    ).toThrow(GoogleChatConfigError);
   });
 });

@@ -20,6 +20,11 @@ const SECRET_MANAGER_KEYS = [
 ] as const satisfies readonly SecretKey[];
 
 type SecretManagerKey = (typeof SECRET_MANAGER_KEYS)[number];
+const OPTIONAL_SECRET_MANAGER_KEYS = [
+  "GOOGLE_CHAT_CREDENTIALS",
+  "GOOGLE_CHAT_POLL_TOKEN",
+] as const satisfies readonly SecretKey[];
+type OptionalSecretManagerKey = (typeof OPTIONAL_SECRET_MANAGER_KEYS)[number];
 
 /** Secret Manager 呼び出しの既定タイムアウト（ミリ秒）。 */
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -32,7 +37,7 @@ export interface GcpSecretProviderOptions {
   /** GCP プロジェクト ID。 */
   projectId: string;
   /** 秘密キー → Secret Manager シークレット名のマッピング。 */
-  secretNames: Record<SecretManagerKey, string> & { GOOGLE_CHAT_CREDENTIALS?: string };
+  secretNames: Record<SecretManagerKey, string> & Partial<Record<OptionalSecretManagerKey, string>>;
   /** 取得するシークレットバージョン。既定 'latest'。 */
   version?: string;
   /** Secret Manager 呼び出し 1 回あたりの上限ミリ秒。既定 5000。 */
@@ -43,7 +48,7 @@ export interface GcpSecretProviderOptions {
  * Secret Manager から対象シークレットを起動時にプリフェッチし、同期 `SecretProvider` を返す。
  *
  * 秘密キー（`DATABASE_URL` / `CHATWORK_WEBHOOK_TOKEN` / `CHATWORK_API_TOKEN` / `SLACK_BOT_TOKEN` /
- * `SLACK_SIGNING_SECRET`）は
+ * `SLACK_SIGNING_SECRET` / `GOOGLE_CHAT_CREDENTIALS` / `GOOGLE_CHAT_POLL_TOKEN`）は
  * メモリにキャッシュした値を返し、それ以外のキーは内部の
  * `EnvSecretProvider` にフォールバックする。Secret Manager 呼び出しは `withTimeout`
  * （既定 5000ms）と `withRetry`（指数バックオフ・最大 2 回）で囲む。認証は ADC を用いる。
@@ -66,10 +71,10 @@ export async function createGcpSecretProvider(
   const version = options.version ?? "latest";
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  const keys: readonly (SecretManagerKey | "GOOGLE_CHAT_CREDENTIALS")[] = options.secretNames
-    .GOOGLE_CHAT_CREDENTIALS
-    ? [...SECRET_MANAGER_KEYS, "GOOGLE_CHAT_CREDENTIALS"]
-    : SECRET_MANAGER_KEYS;
+  const keys: readonly (SecretManagerKey | OptionalSecretManagerKey)[] = [
+    ...SECRET_MANAGER_KEYS,
+    ...OPTIONAL_SECRET_MANAGER_KEYS.filter((key) => options.secretNames[key]),
+  ];
   for (const key of keys) {
     const name = `projects/${options.projectId}/secrets/${options.secretNames[key]}/versions/${version}`;
 
@@ -99,7 +104,10 @@ export async function createGcpSecretProvider(
   return {
     get(key: SecretKey): string | undefined {
       // 秘密キーはプリフェッチ済みキャッシュのみ。それ以外は env にフォールバックする。
-      if (isSecretManagerKey(key) || key === "GOOGLE_CHAT_CREDENTIALS") {
+      if (
+        isSecretManagerKey(key) ||
+        (OPTIONAL_SECRET_MANAGER_KEYS as readonly SecretKey[]).includes(key)
+      ) {
         return cache.get(key);
       }
       return env.get(key);

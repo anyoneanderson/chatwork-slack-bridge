@@ -16,19 +16,35 @@ const CredentialsSchema = z
     refreshToken: value.refresh_token,
     ...(value.sender_names !== undefined ? { senderNames: value.sender_names } : {}),
   }));
-const GoogleChatConfigSchema = z.object({
-  accountEmail: z
-    .string()
-    .email()
-    .transform((value) => value.toLowerCase()),
-  spaceName: z.string().regex(/^spaces\/[A-Za-z0-9_-]+$/),
-  spaceDisplayName: z.string().trim().min(1),
-  slackChannelId: z.string().regex(/^[CG][A-Z0-9]+$/),
-  startTime: z.string().datetime({ offset: true }),
-  pollIntervalMs: z.coerce.number().int().min(10000).max(2147483647).default(60000),
-  allowedReplyUserIds: z.array(z.string().regex(/^[UW][A-Z0-9]+$/)),
-  credentials: CredentialsSchema,
-});
+const GoogleChatConfigSchema = z
+  .object({
+    accountEmail: z
+      .string()
+      .email()
+      .transform((value) => value.toLowerCase()),
+    spaceName: z.string().regex(/^spaces\/[A-Za-z0-9_-]+$/),
+    spaceDisplayName: z.string().trim().min(1),
+    slackChannelId: z.string().regex(/^[CG][A-Z0-9]+$/),
+    startTime: z.string().datetime({ offset: true }),
+    pollMode: z.enum(["timer", "external"]).default("timer"),
+    pollToken: z
+      .string()
+      .min(32)
+      .max(256)
+      .regex(/^[A-Za-z0-9_-]+$/)
+      .optional(),
+    pollIntervalMs: z.coerce.number().int().min(10000).max(2147483647).default(60000),
+    allowedReplyUserIds: z.array(z.string().regex(/^[UW][A-Z0-9]+$/)),
+    credentials: CredentialsSchema,
+  })
+  .superRefine((config, ctx) => {
+    if (config.pollMode === "external" && !config.pollToken)
+      ctx.addIssue({
+        code: "custom",
+        path: ["pollToken"],
+        message: "External polling token required",
+      });
+  });
 export type GoogleChatConfig = z.infer<typeof GoogleChatConfigSchema>;
 
 /** 設定実値・Zod の入力値をエラーへ含めない。 */
@@ -70,6 +86,11 @@ export function loadGoogleChatConfig(provider: SecretProvider): GoogleChatConfig
     spaceDisplayName: provider.get("GOOGLE_CHAT_SPACE_DISPLAY_NAME"),
     slackChannelId: provider.get("GOOGLE_CHAT_SLACK_CHANNEL_ID"),
     startTime: provider.get("GOOGLE_CHAT_START_TIME"),
+    pollMode: provider.get("GOOGLE_CHAT_POLL_MODE"),
+    pollToken:
+      provider.get("GOOGLE_CHAT_POLL_MODE") === "external"
+        ? provider.get("GOOGLE_CHAT_POLL_TOKEN")
+        : undefined,
     pollIntervalMs: provider.get("GOOGLE_CHAT_POLL_INTERVAL_MS"),
     allowedReplyUserIds: (provider.get("GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS") ?? "")
       .split(",")
@@ -84,6 +105,8 @@ export function loadGoogleChatConfig(provider: SecretProvider): GoogleChatConfig
       spaceDisplayName: "GOOGLE_CHAT_SPACE_DISPLAY_NAME",
       slackChannelId: "GOOGLE_CHAT_SLACK_CHANNEL_ID",
       startTime: "GOOGLE_CHAT_START_TIME",
+      pollMode: "GOOGLE_CHAT_POLL_MODE",
+      pollToken: "GOOGLE_CHAT_POLL_TOKEN",
       pollIntervalMs: "GOOGLE_CHAT_POLL_INTERVAL_MS",
       allowedReplyUserIds: "GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS",
       credentials: "GOOGLE_CHAT_CREDENTIALS",

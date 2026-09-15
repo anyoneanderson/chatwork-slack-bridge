@@ -7,7 +7,7 @@ import type { SecretProvider } from "@/adapters/secrets/types";
 import { createSlackClient } from "@/adapters/slack/client";
 import { createApp } from "@/app/server";
 import { createGoogleChatBridge } from "@/app/services/google-chat/bridge";
-import { startGoogleChatPoller } from "@/app/services/google-chat-poller";
+import { startGoogleChatPolling } from "@/app/services/google-chat-poll-runtime";
 import { type Config, ConfigError, loadConfig } from "@/config/env";
 import {
   type GoogleChatConfig,
@@ -76,6 +76,14 @@ async function main(): Promise<void> {
         slackClient: createSlackClient({ botToken: config.SLACK_BOT_TOKEN, retryDisabled: true }),
       })
     : undefined;
+  const googlePollRuntime =
+    googleChatBridge && googleConfig
+      ? startGoogleChatPolling(
+          (signal) => googleChatBridge.poll({ signal }),
+          { mode: googleConfig.pollMode, intervalMs: googleConfig.pollIntervalMs },
+          logger,
+        )
+      : undefined;
   const app = createApp({
     db,
     config,
@@ -83,15 +91,10 @@ async function main(): Promise<void> {
     chatworkClient,
     slackClient,
     ...(googleChatBridge ? { googleChatBridge } : {}),
+    ...(googlePollRuntime && googleConfig?.pollMode === "external" && googleConfig.pollToken
+      ? { googleChatPoll: { runtime: googlePollRuntime, token: googleConfig.pollToken } }
+      : {}),
   });
-  const googlePoller =
-    googleChatBridge && googleConfig
-      ? startGoogleChatPoller(
-          (signal) => googleChatBridge.poll({ signal }),
-          googleConfig.pollIntervalMs,
-          logger,
-        )
-      : undefined;
 
   const server = serve(
     {
@@ -113,12 +116,12 @@ async function main(): Promise<void> {
     logger.info({ op: "server.shutdown", signal }, "shutdown started");
 
     try {
-      await googlePoller?.stop();
+      const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()));
+      await googlePollRuntime?.stop();
+      await serverClosed;
       await db.close();
-      server.close(() => {
-        logger.info({ op: "server.shutdown", signal }, "shutdown completed");
-        process.exit(0);
-      });
+      logger.info({ op: "server.shutdown", signal }, "shutdown completed");
+      process.exit(0);
     } catch (err) {
       logger.error({ op: "server.shutdown", signal, err: serializeError(err) }, "shutdown failed");
       process.exit(1);

@@ -76,7 +76,10 @@ GitHub variables、ログ、Issue に JSON の内容を貼らないでくださ�
 | `GOOGLE_CHAT_SPACE_DISPLAY_NAME` | Slack の転送と送信確認に表示するスペース名。有効化時は必須 |
 | `GOOGLE_CHAT_SLACK_CHANNEL_ID` | 転送先 Slack チャンネルの ID。有効化時は必須 |
 | `GOOGLE_CHAT_START_TIME` | 初回取得の開始時刻。タイムゾーン付き ISO 8601 形式で明示指定する。有効化時は必須 |
-| `GOOGLE_CHAT_POLL_INTERVAL_MS` | 1回の取得終了から次回開始までの待ち時間。既定は `60000`、最小は `10000` ミリ秒 |
+| `GOOGLE_CHAT_POLL_MODE` | `timer`（既定）または `external`。Cloud Run 用ワークフローは `external` を設定 |
+| `GOOGLE_CHAT_POLL_INTERVAL_MS` | `timer` での取得終了から次回開始までの待ち時間。既定は `60000`、最小は `10000` ミリ秒。`external` の呼び出し間隔には使わない |
+| `GOOGLE_CHAT_POLL_TOKEN` | `external` の HTTP 呼び出し専用トークン。英数字と `_`、`-` からなる32～256文字の乱数を secret adapter から取得 |
+| `GOOGLE_CHAT_POLL_TOKEN_SECRET` | `SECRET_BACKEND=gcp` かつ `external` で必須。専用トークンを保管する Secret Manager のシークレット名 |
 | `GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS` | 返信を許可する Slack ユーザー ID をカンマ区切りで指定。空欄なら受信専用 |
 | `GOOGLE_CHAT_CREDENTIALS` | ローカルの secret adapter が読む OAuth 認証情報の JSON。有効化時は必須 |
 | `GOOGLE_CHAT_CREDENTIALS_SECRET` | `SECRET_BACKEND=gcp` の場合に読む Secret Manager のシークレット名。有効化時は必須 |
@@ -138,6 +141,7 @@ Google Chat の同じスレッドに属する続きのメッセージは、最�
 1回の取得は最大5ページで、残りは次回の取得対象です。
 各ページのメッセージとページの進行状況を同じトランザクションで保存し、期間内の全ページが保存されてから、作成時刻順に Slack へ転送します。
 転送は1回につき最大100件で、同じ取得処理内の投稿には少なくとも1秒の間隔を設けます。
+外部起動では45秒の経過時に新しい投稿を止め始めるため、通信や取得にかかる時間に応じて、その回に転送する件数は少なくなります。
 Slack の429では Retry-After を DB の `lease_until` に保存し、別レプリカもその期限まで取得を開始しません。
 `not_in_channel` などの確定拒否は `pending` のまま保存し、その回の転送を終了します。原因を修正すれば次回の取得で再試行します。
 送信前の表示組み立てエラーは `slack_payload_invalid` を記録し、Slack には投稿しません。対象メッセージや表示設定を確認して修正してください。
@@ -272,13 +276,105 @@ COMMIT;
 `config_identity` や `cursor` の上書き、テーブル削除による初期化を通常の復旧手順として実行しないでください。
 許可ユーザー一覧と表示名の対応表は比較対象に含めません。変更後は全レプリカを再起動します。
 
-## Cloud Run で動かす場合
+## 取得の起動方法
 
-取得処理はアプリケーション内のタイマーで動きます。
-停止時は実行中の API 呼び出しの結果を保存し、次のページや投稿を開始しません。強制終了が外部通信に重なった場合は、結果不明時の照合が必要です。
-Google Chat を有効にする場合は、最小インスタンス数を1以上にし、リクエストのない時間も CPU を割り当てる構成にしてください。
-常時稼働による費用が発生するため、既存の Chatwork 用構成から変更する際に運用費を確認します。
-インスタンスが停止していた時間は、次の起動後に保存済みの取得位置から読み進めます。
+取得処理は、どちらの起動方法でも同じ DB の取得位置と送信状態を使います。
+`timer` から `external` へ変更するときに、DB を初期化する必要はありません。
+
+### Docker と VPS のタイマー方式
+
+`GOOGLE_CHAT_POLL_MODE=timer` が既定です。
+アプリの起動時に取得し、終了後に `GOOGLE_CHAT_POLL_INTERVAL_MS` だけ待って次回を開始します。
+専用のスケジューラーや HTTP 呼び出し用トークンは不要です。
+タイマー方式には、外部起動用の45秒の停止期限はありません。
+
+### cron などからの HTTP 呼び出し
+
+`GOOGLE_CHAT_POLL_MODE=external` と専用の `GOOGLE_CHAT_POLL_TOKEN` を設定すると、起動時の自動取得とタイマーを停止します。
+`POST /internal/poll-google-chat` を Bearer 認証付きで定期的に呼び出してください。
+本文は空、または `{}` にします。接続先や取得範囲をリクエストから変更することはできません。
+
+公開ネットワークでは HTTPS を使ってください。
+トークンは OAuth や Slack のトークンと共用せず、暗号学的乱数で生成します。
+curl の認証設定を権限 `600` のファイルへ保存すると、cron のコマンド行に実値を書かずに呼び出せます。
+
+```text
+# /etc/bridge/poll.curl（所有者のみ読み取り可能にする）
+url = "https://bridge.example.com/internal/poll-google-chat"
+header = "Authorization: Bearer <POLL_TOKEN>"
+header = "Content-Type: application/json"
+request = "POST"
+data = "{}"
+max-time = 180
+fail
+silent
+show-error
+```
+
+```cron
+* * * * * curl --config /etc/bridge/poll.curl
+```
+
+取得と転送が終了するまで HTTP 応答を返しません。
+1回の処理開始から45秒を過ぎた場合は、実行中の通信結果を保存してから停止し、次の呼び出しで続きを取得します。
+45秒は通信を強制的に切る上限ではないため、呼び出し元のタイムアウトは180秒以上を設定してください。
+同時呼び出しにはプロセス内の実行制御と DB リースを使います。
+停止時も実行中の通信が終わるまで待ちますが、強制終了が外部通信に重なった場合は結果不明時の照合が必要です。
+
+HTTP の成功は1回の処理の終了を示し、すべてのメッセージの転送完了を示すものではありません。
+45秒で区切った処理は `200 {"ok":true,"complete":false}`、通常終了は `200 {"ok":true,"complete":true}` を返します。`complete` は今回の処理が期限で中断されたかどうかだけを示します。
+同一プロセスで処理中、停止中、または取得制御から例外が返った場合は503です。取得処理内で記録済みの API エラーは200になる場合があるため、HTTP 状態だけで同期の正常性を判定しないでください。
+認証失効や結果不明による接続停止は、既存の通知と DB の状態を確認してください。
+`timer` または Google Chat 無効時は、このエンドポイントを登録しません。
+
+### Cloud Run と Cloud Scheduler
+
+Cloud Run 用ワークフローは `external` を設定し、最小インスタンス数0、リクエスト中のみ CPU 割り当てでデプロイします。
+Cloud Scheduler が毎分 HTTPS で取得を呼び出します。
+定期取得のために1インスタンスを常時稼働させる設定は使いません。
+実際の利用料金は取得時間と呼び出し回数に依存します。
+
+Cloud Scheduler API を有効にし、OAuth JSON とは別の専用トークンを Secret Manager に保存してください。
+改行や通常の base64 の記号を混ぜない生成コマンドは、[トークン登録手順](deploy/cloud-run.md#32-google-chat-の認証情報使用時のみ)に記載しています。
+実行 SA とデプロイ SA に、そのトークンの `roles/secretmanager.secretAccessor` を付与します。
+デプロイ SA には `roles/cloudscheduler.admin` と `roles/serviceusage.serviceUsageViewer` も必要です。
+Scheduler のジョブ設定には認証ヘッダーが保存されるため、ジョブ設定を閲覧できる IAM 権限も制限してください。
+
+GitHub repository variables に次の設定を追加します。
+
+| 変数 | 設定 |
+|------|------|
+| `GOOGLE_CHAT_POLL_TOKEN_SECRET` | 専用トークンの Secret Manager シークレット名。実値は登録しない |
+| `GOOGLE_CHAT_SCHEDULE` | 5フィールドの cron 式（UTC）。月名と曜日名は英大文字。既定は `* * * * *`。取得間隔を5分にする場合は `*/5 * * * *` |
+
+デプロイ後のヘルスチェックに成功すると、ワークフローが `<CLOUD_RUN_SERVICE>-google-chat-poll` ジョブを作成または更新します。
+API の有効状態、ジョブ一覧への参照権限、トークンの読み取りと形式、cron 式は Cloud Run の切り替え前に検査します。ジョブの書き込み権限や実際の呼び出し成功までは事前検査で保証しません。
+ジョブは180秒のタイムアウト、失敗直後の再試行なしで実行します。失敗後は次の定期実行を待ちます。
+Google Chat を無効にしたデプロイでは、このジョブが存在すれば停止します。
+ジョブの停止が完了するまで `GOOGLE_CHAT_POLL_TOKEN_SECRET` の repository variable を残してください。無効かつ参照名が未設定の場合は、Scheduler の操作をスキップします。
+取得が不要な時間帯は cron 式で除外できます。次回は DB に保存した位置から取得するため、除外期間の新着も後で取り込みます。
+
+タイマー方式の既存デプロイから移す場合は、先に API、権限、トークンを準備し、ワークフローで新しいリビジョンとジョブを反映してください。
+古いリビジョンへのトラフィック分割を残さず、ジョブが新しいリビジョンへ到達することを確認します。
+トークン更新では、先に Scheduler ジョブを pause し、実行中の取得が終了するまで待ちます。
+このサービスは起動ごとに Secret Manager の `latest` を読み込むため、新旧トークンが混在する間に呼び出すと401になる可能性があります。
+
+```bash
+gcloud scheduler jobs pause "<SERVICE_NAME>-google-chat-poll" \
+  --location=asia-northeast1 --project="<PROJECT_ID>"
+node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))' \
+  | gcloud secrets versions add "<GOOGLE_CHAT_POLL_TOKEN_SECRET_NAME>" \
+      --data-file=- --project="<PROJECT_ID>"
+```
+
+更新後に通常のデプロイワークフローを実行します。新リビジョンと Scheduler ヘッダーを更新してからジョブを resume します。
+途中で失敗した場合はジョブを PAUSED のままにし、原因を修正してワークフローを再実行してください。旧トークンへ戻す場合も、その値を新しい Secret バージョンとして登録し直してから再デプロイし、アプリとヘッダーが一致した後に再開します。
+切り替え中に別のトークン更新を行わず、旧リビジョンへのトラフィック分割を残さないでください。
+停止期間のメッセージは保存済みの取得位置から後で取り込みます。
+
+運用開始時は Scheduler の実行結果、Cloud Run のリクエスト時間、DB の取得位置を確認します。
+Cloud Scheduler からの実呼び出しはデプロイ後に別途確認が必要です。
+[Cloud Scheduler の実行と再試行](https://docs.cloud.google.com/scheduler/docs/creating)も参照してください。
 
 ## テストと実機確認
 

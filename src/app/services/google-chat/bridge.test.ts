@@ -4,7 +4,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { GoogleChatError, type GoogleChatMessage } from "@/adapters/google-chat/types";
 import { SlackApiError } from "@/adapters/slack/client";
 import { toSlackChannelId, toSlackTs } from "@/adapters/slack/types";
-import { createGoogleChatBridge } from "@/app/services/google-chat/bridge";
+import {
+  createGoogleChatBridge,
+  googleChatConfigIdentity,
+} from "@/app/services/google-chat/bridge";
 import type { GoogleChatConfig } from "@/config/google-chat";
 import { createDbClient } from "@/db/client";
 import {
@@ -27,6 +30,7 @@ describe.skipIf(!databaseUrl)("Google Chat の永続配送（実 PostgreSQL）",
     slackChannelId: "CFAKE",
     startTime: start,
     pollIntervalMs: 60000,
+    pollMode: "timer",
     allowedReplyUserIds: ["UALLOWED"],
     credentials: { clientId: "fake", clientSecret: "fake", refreshToken: "fake" },
   };
@@ -129,6 +133,37 @@ describe.skipIf(!databaseUrl)("Google Chat の永続配送（実 PostgreSQL）",
     const calls = f.client.listMessages.mock.calls;
     expect(calls[5]?.[0]).toMatchObject({ ...calls[0]?.[0], pageToken: "5" });
   }, 15000);
+  it("ページ間で停止した取得を再起動後も同じ区間と token から再開する", async () => {
+    const f = fixture({ pollMode: "external", pollToken: "dummy-poll-token-".repeat(3) });
+    const controller = new AbortController();
+    f.client.listMessages.mockImplementationOnce(async () => {
+      controller.abort();
+      return { messages: [message()], nextPageToken: "next-page" };
+    });
+    await f.bridge.poll({ signal: controller.signal });
+    expect(f.client.listMessages).toHaveBeenCalledOnce();
+    expect(f.slackClient.postMessage).not.toHaveBeenCalled();
+    const [paused] = await db.db.select().from(connections);
+    expect(paused?.pageToken).toBe("next-page");
+    expect(paused?.windowAfter).not.toBeNull();
+    expect(paused?.windowBefore).not.toBeNull();
+    expect(paused?.leaseToken).toBeNull();
+    const restarted = fixture({ pollMode: "external", pollToken: "rotated-poll-token-".repeat(3) });
+    restarted.client.listMessages.mockResolvedValue({ messages: [message("two")] });
+    await expireCooldown();
+    await restarted.bridge.poll();
+    expect(restarted.client.listMessages.mock.calls[0]?.[0]).toMatchObject({
+      ...f.client.listMessages.mock.calls[0]?.[0],
+      pageToken: "next-page",
+    });
+    expect(restarted.slackClient.postMessage).toHaveBeenCalledTimes(2);
+    expect((await db.db.select().from(inbox)).map((row) => row.status)).toEqual(["sent", "sent"]);
+    const [resumed] = await db.db.select().from(connections);
+    expect(resumed?.pageToken).toBeNull();
+    expect(resumed?.windowAfter).toBeNull();
+    expect(resumed?.windowBefore).toBeNull();
+  });
+
   it("ページ取得失敗では checkpoint を進めず、再開後も重複しない", async () => {
     const f = fixture();
     f.client.listMessages
@@ -481,5 +516,38 @@ describe.skipIf(!databaseUrl)("Google Chat の永続配送（実 PostgreSQL）",
     expect(row?.status).toBe("cancelled");
     if (row) await f.bridge.handleAction("gc_send", row.id, "UALLOWED");
     expect(f.client.createReply).not.toHaveBeenCalled();
+  });
+});
+
+describe("Google Chat connection identity", () => {
+  it("keeps persisted state across timer and external mode changes or token rotation", () => {
+    const config: GoogleChatConfig = {
+      accountEmail: "bridge@example.test",
+      spaceName: "spaces/FAKE",
+      spaceDisplayName: "Dummy space",
+      slackChannelId: "CFAKE",
+      startTime: "2026-01-01T00:00:00Z",
+      pollIntervalMs: 60000,
+      pollMode: "timer",
+      allowedReplyUserIds: [],
+      credentials: { clientId: "dummy", clientSecret: "dummy", refreshToken: "dummy" },
+    };
+    const identity = googleChatConfigIdentity(config);
+    expect(
+      googleChatConfigIdentity({
+        ...config,
+        pollMode: "external",
+        pollToken: "dummy-poll-token-".repeat(3),
+      }),
+    ).toBe(identity);
+    expect(
+      googleChatConfigIdentity({
+        ...config,
+        pollMode: "external",
+        pollIntervalMs: 120000,
+        pollToken: "rotated-poll-token-".repeat(3),
+      }),
+    ).toBe(identity);
+    expect(googleChatConfigIdentity({ ...config, slackChannelId: "COTHER" })).not.toBe(identity);
   });
 });

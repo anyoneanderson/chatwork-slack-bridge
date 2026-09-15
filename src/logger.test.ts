@@ -30,6 +30,10 @@ describe("createLogger", () => {
       CHATWORK_API_TOKEN: "dummy-chatwork-api-token",
       SLACK_BOT_TOKEN: "xoxb-dummy-slack-bot-token",
       SLACK_SIGNING_SECRET: "dummy-slack-signing-secret",
+      GOOGLE_CHAT_POLL_TOKEN: "dummy-private-uppercase-poll-token",
+      pollToken: "dummy-private-config-poll-token",
+      token: "dummy-private-route-poll-token",
+      authorization: "Bearer dummy-private-auth-token",
     };
 
     // 素のキー / config.* / 任意ネスト（*.）の各経路を網羅して検証する。
