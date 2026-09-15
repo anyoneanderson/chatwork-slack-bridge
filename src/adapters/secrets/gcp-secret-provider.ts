@@ -32,7 +32,7 @@ export interface GcpSecretProviderOptions {
   /** GCP プロジェクト ID。 */
   projectId: string;
   /** 秘密キー → Secret Manager シークレット名のマッピング。 */
-  secretNames: Record<SecretManagerKey, string>;
+  secretNames: Record<SecretManagerKey, string> & { GOOGLE_CHAT_CREDENTIALS?: string };
   /** 取得するシークレットバージョン。既定 'latest'。 */
   version?: string;
   /** Secret Manager 呼び出し 1 回あたりの上限ミリ秒。既定 5000。 */
@@ -62,11 +62,15 @@ export async function createGcpSecretProvider(
 ): Promise<SecretProvider> {
   const client = new SecretManagerServiceClient();
   const env = new EnvSecretProvider();
-  const cache = new Map<SecretManagerKey, string>();
+  const cache = new Map<SecretKey, string>();
   const version = options.version ?? "latest";
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  for (const key of SECRET_MANAGER_KEYS) {
+  const keys: readonly (SecretManagerKey | "GOOGLE_CHAT_CREDENTIALS")[] = options.secretNames
+    .GOOGLE_CHAT_CREDENTIALS
+    ? [...SECRET_MANAGER_KEYS, "GOOGLE_CHAT_CREDENTIALS"]
+    : SECRET_MANAGER_KEYS;
+  for (const key of keys) {
     const name = `projects/${options.projectId}/secrets/${options.secretNames[key]}/versions/${version}`;
 
     let payload: string | undefined;
@@ -95,7 +99,7 @@ export async function createGcpSecretProvider(
   return {
     get(key: SecretKey): string | undefined {
       // 秘密キーはプリフェッチ済みキャッシュのみ。それ以外は env にフォールバックする。
-      if (isSecretManagerKey(key)) {
+      if (isSecretManagerKey(key) || key === "GOOGLE_CHAT_CREDENTIALS") {
         return cache.get(key);
       }
       return env.get(key);

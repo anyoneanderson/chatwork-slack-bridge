@@ -102,7 +102,17 @@ export function createSlackInteractionsRoute(deps: AppDeps): Hono {
       return c.json({ ok: true }, 200);
     }
 
-    if (action.action_id === SLACK_ACTION_SEND) {
+    if (["gc_send", "gc_cancel", "gc_check"].includes(action.action_id)) {
+      try {
+        await deps.googleChatBridge?.handleAction(action.action_id, action.value, pressUserId);
+      } catch {
+        deps.logger.error(
+          { op: "google_chat.slack_action", code: "processing_failed" },
+          "retry required",
+        );
+        return c.json({ error: "temporarily_unavailable" }, 503);
+      }
+    } else if (action.action_id === SLACK_ACTION_SEND) {
       await sendOutbound({ outboundId: action.value, pressUserId }, sendDeps);
     } else if (action.action_id === SLACK_ACTION_CANCEL) {
       await cancelOutbound({ outboundId: action.value, pressUserId }, sendDeps);

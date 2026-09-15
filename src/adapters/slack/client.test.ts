@@ -1,3 +1,4 @@
+import { ErrorCode } from "@slack/web-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createSlackClient, SlackApiError } from "@/adapters/slack/client";
@@ -24,12 +25,18 @@ const DUMMY_PNG_BYTES = new Uint8Array([
 const postMessageMock = vi.fn();
 const updateMock = vi.fn();
 const uploadV2Mock = vi.fn();
+const webClientConstructorMock = vi.fn();
 
-vi.mock("@slack/web-api", () => ({
+vi.mock("@slack/web-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@slack/web-api")>()),
   WebClient: class {
     public chat: { postMessage: typeof postMessageMock; update: typeof updateMock };
     public files: { uploadV2: typeof uploadV2Mock };
-    constructor(public token: string) {
+    constructor(
+      public token: string,
+      options?: unknown,
+    ) {
+      webClientConstructorMock(token, options);
       this.chat = { postMessage: postMessageMock, update: updateMock };
       this.files = { uploadV2: uploadV2Mock };
     }
@@ -51,6 +58,7 @@ function makeUploadInput(override: Partial<SlackUploadFileInput> = {}): SlackUpl
 }
 
 beforeEach(() => {
+  webClientConstructorMock.mockReset();
   postMessageMock.mockReset();
   updateMock.mockReset();
   uploadV2Mock.mockReset();
@@ -507,4 +515,132 @@ describe("createSlackClient.uploadFile", () => {
     // 安全なエラーコード（識別子）は伝わってよい。
     expect(error.slackError).toBe("rate_limited");
   });
+});
+
+describe("Slack SDK retry configuration", () => {
+  it("disables automatic retries and rate-limit waits only for an explicit retryDisabled client", () => {
+    createSlackClient({ botToken: DUMMY_BOT_TOKEN, retryDisabled: true });
+    expect(webClientConstructorMock).toHaveBeenCalledWith(DUMMY_BOT_TOKEN, {
+      retryConfig: { retries: 0 },
+      rejectRateLimitedCalls: true,
+      timeout: 15000,
+    });
+  });
+  it.each([
+    undefined,
+    false,
+  ])("keeps legacy Chatwork SDK defaults when retryDisabled=%s", (retryDisabled) => {
+    createSlackClient({
+      botToken: DUMMY_BOT_TOKEN,
+      ...(retryDisabled === undefined ? {} : { retryDisabled }),
+    });
+    expect(webClientConstructorMock).toHaveBeenCalledWith(DUMMY_BOT_TOKEN, {});
+  });
+});
+
+describe("Slack posting error classification", () => {
+  it("preserves retry-after for a rate-limited call without retaining the SDK error", async () => {
+    postMessageMock.mockRejectedValue({
+      code: ErrorCode.RateLimitedError,
+      retryAfter: 17,
+      message: `raw-response-bait ${DUMMY_BOT_TOKEN}`,
+      data: { text: DUMMY_TEXT },
+    });
+    const client = createSlackClient({ botToken: DUMMY_BOT_TOKEN, retryDisabled: true });
+    const error = await client
+      .postMessage(DUMMY_CHANNEL_ID, { text: DUMMY_TEXT })
+      .catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(SlackApiError);
+    expect(error).toMatchObject({ kind: "rate_limited", retryAfterSeconds: 17 });
+    const serialized = JSON.stringify({
+      ...(error as object),
+      message: (error as Error).message,
+      cause: (error as Error).cause,
+    });
+    expect(serialized).not.toContain("raw-response-bait");
+    expect(serialized).not.toContain(DUMMY_BOT_TOKEN);
+    expect(serialized).not.toContain(DUMMY_TEXT);
+    expect((error as Error).cause).toBeUndefined();
+    expect(postMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    "channel_not_found",
+    "not_in_channel",
+    "invalid_auth",
+  ])("classifies explicit platform rejection %s as rejected", async (code) => {
+    postMessageMock.mockRejectedValue({
+      code: ErrorCode.PlatformError,
+      data: { ok: false, error: code },
+    });
+    const client = createSlackClient({ botToken: DUMMY_BOT_TOKEN });
+    await expect(client.postMessage(DUMMY_CHANNEL_ID, { text: DUMMY_TEXT })).rejects.toMatchObject({
+      kind: "rejected",
+      slackError: code,
+    });
+  });
+
+  it("classifies transport failure as unknown instead of assuming Slack rejected the message", async () => {
+    postMessageMock.mockRejectedValue({
+      code: ErrorCode.RequestError,
+      original: new Error("network raw-response-bait"),
+    });
+    const client = createSlackClient({ botToken: DUMMY_BOT_TOKEN, retryDisabled: true });
+    await expect(client.postMessage(DUMMY_CHANNEL_ID, { text: DUMMY_TEXT })).rejects.toMatchObject({
+      kind: "unknown",
+    });
+    expect(postMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps missing success ts unknown because the message may have been accepted", async () => {
+    postMessageMock.mockResolvedValue({ ok: true });
+    await expect(
+      createSlackClient({ botToken: DUMMY_BOT_TOKEN }).postMessage(DUMMY_CHANNEL_ID, {
+        text: DUMMY_TEXT,
+      }),
+    ).rejects.toMatchObject({ kind: "unknown" });
+  });
+});
+
+describe("Slack ambiguous failures remain unknown", () => {
+  it.each([
+    { code: ErrorCode.HTTPError, statusCode: 503 },
+    { code: ErrorCode.PlatformError, data: { error: "unrecognized-private-code" } },
+    { data: { error: "channel_not_found" } },
+  ])("does not infer a safe retry from incomplete or unknown SDK evidence", async (sdkError) => {
+    postMessageMock.mockRejectedValue(sdkError);
+    await expect(
+      createSlackClient({ botToken: DUMMY_BOT_TOKEN }).postMessage(DUMMY_CHANNEL_ID, {
+        text: DUMMY_TEXT,
+      }),
+    ).rejects.toMatchObject({ kind: "unknown" });
+  });
+
+  it("drops an unrecognized external error string", async () => {
+    postMessageMock.mockRejectedValue({
+      code: ErrorCode.PlatformError,
+      data: { error: DUMMY_BOT_TOKEN },
+    });
+    const error = await createSlackClient({ botToken: DUMMY_BOT_TOKEN })
+      .postMessage(DUMMY_CHANNEL_ID, { text: DUMMY_TEXT })
+      .catch((value: unknown) => value);
+    expect(error).toMatchObject({ kind: "unknown", slackError: undefined });
+    expect(JSON.stringify(error)).not.toContain(DUMMY_BOT_TOKEN);
+    expect(String(error)).not.toContain(DUMMY_BOT_TOKEN);
+  });
+});
+
+it.each([
+  -1,
+  Number.NaN,
+  Number.POSITIVE_INFINITY,
+  "17",
+  undefined,
+])("keeps a 429 classified as rate-limited while ignoring invalid retry-after %s", async (retryAfter) => {
+  postMessageMock.mockRejectedValue({ code: ErrorCode.RateLimitedError, retryAfter });
+  await expect(
+    createSlackClient({ botToken: DUMMY_BOT_TOKEN }).postMessage(DUMMY_CHANNEL_ID, {
+      text: DUMMY_TEXT,
+    }),
+  ).rejects.toMatchObject({ kind: "rate_limited", retryAfterSeconds: undefined });
 });

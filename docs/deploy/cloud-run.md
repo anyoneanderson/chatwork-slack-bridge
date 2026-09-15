@@ -53,7 +53,7 @@ Chatwork Slack Bridge を Google Cloud Run へデプロイするための、初�
 
 > Slack の集約フォールバックチャンネル ID（`SLACK_DEFAULT_GROUP_CHANNEL_ID` / `SLACK_DEFAULT_DM_CHANNEL_ID`）と送信 allowlist（`SLACK_ALLOWED_REPLY_USER_IDS`・任意）は秘密ではない設定値のため Secret Manager ではなく GitHub variable（`--set-env-vars` 経由）で渡す。
 
-> **WIF を使うため、SA の JSON 鍵は発行・保管しない。** GitHub には秘密の実値を一切置かず、`vars.*`（repository variables）に参照情報のみを設定する。
+> **WIF を使うため、SA の JSON 鍵は発行・保管しない。** OAuth トークンなどの認証情報は Secret Manager に保管し、GitHub variables には参照情報を設定する。Google Chat の接続先設定は、Actions ログのマスク用に GitHub secrets を使う（§5）。
 
 ### 1.1 必要な API の有効化
 
@@ -237,7 +237,7 @@ printf '%s' '<SLACK_SIGNING_SECRET_VALUE>'   | gcloud secrets versions add "<SLA
 
 ## 4. 必要な GitHub repository variables 一覧
 
-リポジトリの **Settings → Secrets and variables → Actions → Variables**（repository variables）に以下を設定する。**Secrets ではなく Variables** に置く（いずれも秘密の実値ではなく参照情報・スイッチのため）。秘密の実値（`DATABASE_URL`）は GitHub には置かず、Secret Manager に保管する。
+リポジトリの **Settings → Secrets and variables → Actions → Variables**（repository variables）に以下を設定する。この表の項目は **Variables** に置く（参照情報・スイッチのため）。Google Chat の追加設定では、一部を Secrets に置く（§5）。秘密の実値（`DATABASE_URL`）は GitHub には置かず、Secret Manager に保管する。
 
 | 変数 | 用途 | 例（プレースホルダ） |
 |------|------|----------------------|
@@ -265,6 +265,12 @@ printf '%s' '<SLACK_SIGNING_SECRET_VALUE>'   | gcloud secrets versions add "<SLA
 > また、deploy ジョブは `environment: production` を使うため、リポジトリに **`production` environment** を作成しておく（保護ルールや必須レビュアーを付けたい場合はここで設定）。
 
 ## 5. デプロイの流れ
+
+Google Chat を接続する場合は、[専用手順](../google-chat.md)に従って OAuth JSON を Secret Manager に登録し、実行 SA にそのシークレットの読取権限を付与する。
+同手順に従ってスイッチと参照名を repository variables、アカウント・接続先を repository secrets に追加する。OAuth JSON の実値は Secret Manager に保存する。
+`GOOGLE_CHAT_ENABLED` 未設定時は無効。`true` または `1` のとき、ワークフローは定期取得を継続するため最小インスタンス数を1、CPUを常時割当にする。
+リクエスト待機中もインスタンスが稼働するため、既存の最小0・リクエスト時CPU割当の構成より課金対象が増える。
+無効時のデプロイでは最小0・リクエスト時CPU割当に戻す。
 
 `main` への push（マージ）または **`main` ブランチに対する** 手動 `workflow_dispatch` で [`deploy-cloud-run.yml`](../../.github/workflows/deploy-cloud-run.yml) が起動する。deploy ジョブは `github.ref == 'refs/heads/main'` に固定されているため、feature ブランチを選んで `workflow_dispatch` しても deploy は実行されない（`quality-gate` のみ）。PR でも `quality-gate` のみ実行され、deploy は行われない。
 

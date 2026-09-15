@@ -87,9 +87,19 @@ export async function createSecretProvider(): Promise<SecretProvider> {
     throw new SecretConfigError(missingKeys);
   }
 
+  const googleChatEnabled =
+    process.env.GOOGLE_CHAT_ENABLED === "true" || process.env.GOOGLE_CHAT_ENABLED === "1";
+  const googleChatCredentialsSecret = process.env.GOOGLE_CHAT_CREDENTIALS_SECRET;
+  if (googleChatEnabled && !googleChatCredentialsSecret) {
+    throw new SecretConfigError(["GOOGLE_CHAT_CREDENTIALS_SECRET"]);
+  }
+
   return createGcpSecretProvider({
     projectId,
     secretNames: {
+      ...(googleChatEnabled && googleChatCredentialsSecret
+        ? { GOOGLE_CHAT_CREDENTIALS: googleChatCredentialsSecret }
+        : {}),
       DATABASE_URL: databaseUrlSecret,
       CHATWORK_WEBHOOK_TOKEN: chatworkWebhookTokenSecret,
       CHATWORK_API_TOKEN: chatworkApiTokenSecret,

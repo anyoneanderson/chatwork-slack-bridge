@@ -27,6 +27,20 @@ env:
 jobs:
   quality-gate:
     runs-on: ubuntu-latest
+    env:
+      GOOGLE_CHAT_TEST_DATABASE_URL: postgres://bridge:bridge-local-test@127.0.0.1:5432/bridge_test
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bridge
+          POSTGRES_PASSWORD: bridge-local-test
+          POSTGRES_DB: bridge_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bridge -d bridge_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -182,12 +196,33 @@ jobs:
           SLACK_DEFAULT_DM_CHANNEL_ID: ${{ vars.SLACK_DEFAULT_DM_CHANNEL_ID }}
           # 送信操作の allowlist（任意・カンマ区切りの Slack user ID）。未設定なら空文字＝本人のみ許可で安全。
           SLACK_ALLOWED_REPLY_USER_IDS: ${{ vars.SLACK_ALLOWED_REPLY_USER_IDS }}
+          GOOGLE_CHAT_ENABLED: ${{ vars.GOOGLE_CHAT_ENABLED || 'false' }}
+          GOOGLE_CHAT_CREDENTIALS_SECRET: ${{ vars.GOOGLE_CHAT_CREDENTIALS_SECRET }}
+          # 接続先・氏名は公開 Actions ログに出さないため GitHub Secrets でマスクする。
+          GOOGLE_CHAT_ACCOUNT_EMAIL: ${{ secrets.GOOGLE_CHAT_ACCOUNT_EMAIL }}
+          GOOGLE_CHAT_SPACE_NAME: ${{ secrets.GOOGLE_CHAT_SPACE_NAME }}
+          GOOGLE_CHAT_SPACE_DISPLAY_NAME: ${{ secrets.GOOGLE_CHAT_SPACE_DISPLAY_NAME }}
+          GOOGLE_CHAT_SLACK_CHANNEL_ID: ${{ secrets.GOOGLE_CHAT_SLACK_CHANNEL_ID }}
+          GOOGLE_CHAT_START_TIME: ${{ vars.GOOGLE_CHAT_START_TIME }}
+          GOOGLE_CHAT_POLL_INTERVAL_MS: ${{ vars.GOOGLE_CHAT_POLL_INTERVAL_MS || '60000' }}
+          GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS: ${{ secrets.GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS }}
         run: |
           set -euo pipefail
 
           # DATABASE_URL / *_TOKEN (秘密の実値) は --update-secrets で注入しない。
           # アプリが Secret Manager adapter (SECRET_BACKEND=gcp) 経由で実行時に取得する設計。
           # --set-env-vars には参照情報 (シークレット名)・スイッチ・非秘密の設定値 (チャンネル ID) のみを渡す。
+          google_runtime=(--min-instances 0 --cpu-throttling)
+          if [[ "${GOOGLE_CHAT_ENABLED}" == "true" || "${GOOGLE_CHAT_ENABLED}" == "1" ]]; then
+            # バックグラウンド取得には常時 CPU と少なくとも1インスタンスが必要。
+            google_runtime=(--min-instances 1 --no-cpu-throttling)
+          fi
+          for key in GOOGLE_CHAT_ENABLED GOOGLE_CHAT_CREDENTIALS_SECRET GOOGLE_CHAT_ACCOUNT_EMAIL GOOGLE_CHAT_SPACE_NAME GOOGLE_CHAT_SPACE_DISPLAY_NAME GOOGLE_CHAT_SLACK_CHANNEL_ID GOOGLE_CHAT_START_TIME GOOGLE_CHAT_POLL_INTERVAL_MS GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS; do
+            if [[ "${!key}" == *"@@"* ]]; then
+              echo "::error::Invalid Google Chat configuration delimiter"
+              exit 1
+            fi
+          done
           gcloud run deploy "${APP_SERVICE}" \
             --image "${{ steps.meta.outputs.image_uri }}" \
             --region "${CLOUD_RUN_REGION}" \
@@ -195,11 +230,11 @@ jobs:
             --allow-unauthenticated \
             --service-account "${APP_SERVICE_ACCOUNT}" \
             --port 8080 \
-            --min-instances 0 \
+            "${google_runtime[@]}" \
             --max-instances 3 \
             --cpu 1 \
             --memory 512Mi \
-            --set-env-vars "^@@^NODE_ENV=production@@SECRET_BACKEND=gcp@@GOOGLE_CLOUD_PROJECT=${APP_PROJECT_ID}@@DATABASE_URL_SECRET=${DATABASE_URL_SECRET}@@DB_POOLED=true@@CHATWORK_WEBHOOK_TOKEN_SECRET=${CHATWORK_WEBHOOK_TOKEN_SECRET}@@CHATWORK_API_TOKEN_SECRET=${CHATWORK_API_TOKEN_SECRET}@@SLACK_BOT_TOKEN_SECRET=${SLACK_BOT_TOKEN_SECRET}@@SLACK_SIGNING_SECRET_SECRET=${SLACK_SIGNING_SECRET_SECRET}@@SLACK_DEFAULT_GROUP_CHANNEL_ID=${SLACK_DEFAULT_GROUP_CHANNEL_ID}@@SLACK_DEFAULT_DM_CHANNEL_ID=${SLACK_DEFAULT_DM_CHANNEL_ID}@@SLACK_ALLOWED_REPLY_USER_IDS=${SLACK_ALLOWED_REPLY_USER_IDS}" \
+            --set-env-vars "^@@^NODE_ENV=production@@SECRET_BACKEND=gcp@@GOOGLE_CLOUD_PROJECT=${APP_PROJECT_ID}@@DATABASE_URL_SECRET=${DATABASE_URL_SECRET}@@DB_POOLED=true@@CHATWORK_WEBHOOK_TOKEN_SECRET=${CHATWORK_WEBHOOK_TOKEN_SECRET}@@CHATWORK_API_TOKEN_SECRET=${CHATWORK_API_TOKEN_SECRET}@@SLACK_BOT_TOKEN_SECRET=${SLACK_BOT_TOKEN_SECRET}@@SLACK_SIGNING_SECRET_SECRET=${SLACK_SIGNING_SECRET_SECRET}@@SLACK_DEFAULT_GROUP_CHANNEL_ID=${SLACK_DEFAULT_GROUP_CHANNEL_ID}@@SLACK_DEFAULT_DM_CHANNEL_ID=${SLACK_DEFAULT_DM_CHANNEL_ID}@@SLACK_ALLOWED_REPLY_USER_IDS=${SLACK_ALLOWED_REPLY_USER_IDS}@@GOOGLE_CHAT_ENABLED=${GOOGLE_CHAT_ENABLED}@@GOOGLE_CHAT_CREDENTIALS_SECRET=${GOOGLE_CHAT_CREDENTIALS_SECRET}@@GOOGLE_CHAT_ACCOUNT_EMAIL=${GOOGLE_CHAT_ACCOUNT_EMAIL}@@GOOGLE_CHAT_SPACE_NAME=${GOOGLE_CHAT_SPACE_NAME}@@GOOGLE_CHAT_SPACE_DISPLAY_NAME=${GOOGLE_CHAT_SPACE_DISPLAY_NAME}@@GOOGLE_CHAT_SLACK_CHANNEL_ID=${GOOGLE_CHAT_SLACK_CHANNEL_ID}@@GOOGLE_CHAT_START_TIME=${GOOGLE_CHAT_START_TIME}@@GOOGLE_CHAT_POLL_INTERVAL_MS=${GOOGLE_CHAT_POLL_INTERVAL_MS}@@GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS=${GOOGLE_CHAT_ALLOWED_REPLY_USER_IDS}" \
             --labels "commit-sha=${GITHUB_SHA::12},managed-by=github-actions" \
             --quiet
 
